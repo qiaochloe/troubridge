@@ -12,10 +12,24 @@ GOOGLE_MALLOC_SECTION_BEGIN
 namespace tcmalloc {
 namespace tcmalloc_internal {
 
+// Thread-local flag to prevent reentrant calls. If we're already recording
+// an allocation, skip nested calls to avoid deadlock when the hash map
+// needs to allocate memory for resizing.
+ABSL_CONST_INIT static thread_local bool recording_allocation = false;
+
 void AllocationSiteRecorder::RecordAllocation(size_t size) {
   if (!IsEnabled()) {
     return;
   }
+
+  // Prevent reentrant calls - if we're already inside RecordAllocation(),
+  // skip this call to avoid deadlock when hash map operations trigger
+  // memory allocations.
+  if (recording_allocation) {
+    return;
+  }
+
+  recording_allocation = true;
 
   // Capture stack trace, skipping this function and the allocation function
   StackTrace trace = {};
@@ -23,18 +37,23 @@ void AllocationSiteRecorder::RecordAllocation(size_t size) {
   trace.requested_size = size;
   trace.allocated_size = size;
 
-  absl::MutexLock lock(&mutex_);
-  auto it = sites_.find(trace);
-  if (it != sites_.end()) {
-    // Update existing site
-    it->second.total_count++;
-    it->second.total_bytes += size;
-    it->second.min_size = std::min(it->second.min_size, size);
-    it->second.max_size = std::max(it->second.max_size, size);
-  } else {
-    // Insert new site
-    sites_.emplace(trace, AllocationSite(trace, size));
+  {
+    absl::MutexLock lock(&mutex_);
+    auto it = sites_.find(trace);
+    if (it != sites_.end()) {
+      // Update existing site
+      it->second.total_count++;
+      it->second.total_bytes += size;
+      it->second.min_size = std::min(it->second.min_size, size);
+      it->second.max_size = std::max(it->second.max_size, size);
+    } else {
+      // Insert new site - this might allocate, but we've already set
+      // recording_allocation to prevent reentrancy
+      sites_.emplace(trace, AllocationSite(trace, size));
+    }
   }
+
+  recording_allocation = false;
 }
 
 std::vector<AllocationSite> AllocationSiteRecorder::GetAllocationSites() const {
