@@ -60,6 +60,10 @@ class AllocationSiteRecorder {
   // Enable or disable recording.
   void SetEnabled(bool enabled) { enabled_.store(enabled, std::memory_order_release); }
 
+  // Print all recorded allocation sites to the printer.
+  // Similar to MallocExtension::GetStats() format.
+  void PrintStats(Printer& out) const ABSL_LOCKS_EXCLUDED(mutex_);
+
  private:
   // Hash function for stack traces.
   struct StackTraceHash {

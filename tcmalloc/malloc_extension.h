@@ -372,6 +372,11 @@ class MallocExtension final {
   // statistics.
   [[nodiscard]] static std::string GetStats();
 
+  // Gets a human readable description of all recorded allocation sites.
+  // Returns allocation site statistics including stack traces, allocation
+  // counts, and byte totals for each unique allocation site.
+  [[nodiscard]] static std::string GetAllocationSiteStats();
+
   // -------------------------------------------------------------------
   // Control operations for getting malloc implementation specific parameters.
   // Some currently useful properties:
