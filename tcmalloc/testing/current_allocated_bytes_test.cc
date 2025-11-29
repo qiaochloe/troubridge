@@ -32,12 +32,10 @@
 #include "tcmalloc/malloc_extension.h"
 #include "tcmalloc/static_vars.h"
 
-using tcmalloc_internal::tc_globals;
-
 int main() {
   // Disable allocation site recorder to prevent its internal hash map
   // allocations from affecting current_allocated_bytes accounting
-  tc_globals.allocation_site_recorder().SetEnabled(false);
+  tcmalloc::tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
 
   constexpr absl::string_view kCurrent = "generic.current_allocated_bytes";
   size_t before_bytes =
