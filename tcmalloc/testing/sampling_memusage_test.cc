@@ -38,7 +38,12 @@ using tcmalloc_internal::ScopedAffinityMask;
 
 class SamplingMemoryTest : public ::testing::TestWithParam<size_t> {
  protected:
-  SamplingMemoryTest() { MallocExtension::SetGuardedSamplingInterval(-1); }
+  SamplingMemoryTest() {
+    MallocExtension::SetGuardedSamplingInterval(-1);
+    // Disable allocation site recorder to prevent its internal hash map
+    // allocations from slowing down the test significantly
+    tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
+  }
 
   size_t Property(absl::string_view name) {
     std::optional<size_t> result = MallocExtension::GetNumericProperty(name);
