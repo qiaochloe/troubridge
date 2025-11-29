@@ -36,6 +36,7 @@
 #include "tcmalloc/malloc_extension.h"
 #include "tcmalloc/malloc_hook.h"
 #include "tcmalloc/malloc_hook_invoke.h"
+#include "tcmalloc/static_vars.h"
 #include "tcmalloc/testing/malloc_hook_recorder.h"
 #include "tcmalloc/testing/testutil.h"
 
@@ -94,6 +95,12 @@ class TCMallocHookTest : public testing::Test {
 
   size_t GetAllocatedSize(const void* ptr) {
     return MallocExtension::GetAllocatedSize(ptr).value();
+  }
+
+  void SetUp() override {
+    // Disable allocation site recorder to prevent its internal hash map
+    // allocations from affecting hook tests
+    tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
   }
 
  private:
