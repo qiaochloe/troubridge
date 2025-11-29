@@ -37,7 +37,6 @@
 #include "absl/time/time.h"
 #include "absl/types/optional.h"
 #include "absl/types/span.h"
-#include "tcmalloc/allocation_site_recorder.h"
 #include "tcmalloc/internal_malloc_extension.h"
 
 #if (defined(ABSL_HAVE_ADDRESS_SANITIZER) ||   \
