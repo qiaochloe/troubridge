@@ -32,11 +32,21 @@
 #include "tcmalloc/internal/percpu.h"
 #include "tcmalloc/internal/sysinfo.h"
 #include "tcmalloc/malloc_extension.h"
+#include "tcmalloc/static_vars.h"
 #include "tcmalloc/testing/test_allocator_harness.h"
 #include "tcmalloc/testing/thread_manager.h"
 
 namespace tcmalloc {
 namespace {
+
+class ReclaimTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    // Disable allocation site recorder to prevent its internal hash map
+    // allocations from affecting CPU cache reclamation tests
+    tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
+  }
+};
 
 // Parse out a line like:
 // cpu   3:         1234 bytes (    0.0 MiB) with     3145728 bytes unallocated
@@ -83,7 +93,7 @@ void GetMallocStats(std::string* buffer) {
   buffer->resize(std::min(required, buffer->size()));
 }
 
-TEST(ReclaimTest, ReclaimWorks) {
+TEST_F(ReclaimTest, ReclaimWorks) {
   if (!MallocExtension::PerCpuCachesActive()) {
     GTEST_SKIP() << "Skipping test without per-CPU caches";
     return;
@@ -136,7 +146,7 @@ TEST(ReclaimTest, ReclaimWorks) {
   EXPECT_EQ(0, ParseCpuCacheSize(after, cpu));
 }
 
-TEST(ReclaimTest, ReclaimStable) {
+TEST_F(ReclaimTest, ReclaimStable) {
   if (!MallocExtension::PerCpuCachesActive()) {
     GTEST_SKIP() << "Skipping test without per-CPU caches";
     return;
