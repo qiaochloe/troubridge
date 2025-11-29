@@ -184,6 +184,7 @@ create_tcmalloc_libraries(
     srcs = [
         "allocation_sample.cc",
         "allocation_sampling.cc",
+        "allocation_site_recorder.cc",
         "arena.cc",
         "arena.h",
         "background.cc",
@@ -247,6 +248,7 @@ create_tcmalloc_libraries(
     hdrs = [
         "allocation_sample.h",
         "allocation_sampling.h",
+        "allocation_site_recorder.h",
         "arena.h",
         "central_freelist.h",
         "common.h",

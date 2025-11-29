@@ -135,8 +135,7 @@ void MallocHook::InvokeSampledNewHookSlow(const SampledAlloc& sampled_alloc) {
 }
 
 void MallocHook::InvokeSampledDeleteHookSlow(
-    const
-    SampledAlloc& sampled_alloc) {
+    const SampledAlloc& sampled_alloc) {
   INVOKE_HOOKS(SampledDeleteHook, tcmalloc_internal::sampled_delete_hooks_,
                (sampled_alloc));
 }

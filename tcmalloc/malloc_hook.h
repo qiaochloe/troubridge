@@ -120,22 +120,16 @@ class MallocHook final {
   //
   // A `SampledAlloc` struct identifying the object -- as all its fields have
   // been stored by the allocator -- is passed in.
-  typedef void (*SampledDeleteHook)(
-      const
-      SampledAlloc& sampled_alloc);
+  typedef void (*SampledDeleteHook)(const SampledAlloc& sampled_alloc);
   [[nodiscard]] static bool AddSampledDeleteHook(SampledDeleteHook hook);
   [[nodiscard]] static bool RemoveSampledDeleteHook(SampledDeleteHook hook);
-  static void InvokeSampledDeleteHook(
-      const
-      SampledAlloc& sampled_alloc);
+  static void InvokeSampledDeleteHook(const SampledAlloc& sampled_alloc);
 
  private:
   static void InvokeNewHookSlow(const NewInfo& info) ABSL_ATTRIBUTE_COLD;
   static void InvokeDeleteHookSlow(const DeleteInfo& info) ABSL_ATTRIBUTE_COLD;
   static void InvokeSampledNewHookSlow(const SampledAlloc& sampled_alloc);
-  static void InvokeSampledDeleteHookSlow(
-      const
-      SampledAlloc& sampled_alloc);
+  static void InvokeSampledDeleteHookSlow(const SampledAlloc& sampled_alloc);
 };
 
 }  // namespace tcmalloc

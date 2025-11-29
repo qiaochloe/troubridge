@@ -593,6 +593,10 @@ class MallocExtension final {
   enum class Ownership { kUnknown = 0, kOwned, kNotOwned };
   static Ownership GetOwnership(const void* absl_nullable p);
 
+  // Returns the number of unique allocation sites that have been recorded.
+  // Allocation sites are recorded with their stack traces for all allocations.
+  static size_t GetAllocationSiteCount();
+
   // Type used by GetProperties.  See comment on GetProperties.
   struct Property {
     size_t value;

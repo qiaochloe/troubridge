@@ -143,6 +143,18 @@ ABSL_ATTRIBUTE_WEAK int64_t
 MallocExtension_Internal_GetMaxTotalThreadCacheBytes();
 ABSL_ATTRIBUTE_WEAK void MallocExtension_Internal_SetMaxTotalThreadCacheBytes(
     int64_t value);
+
+// Forward declaration for allocation site recorder
+namespace tcmalloc {
+namespace tcmalloc_internal {
+class AllocationSiteRecorder;
+}  // namespace tcmalloc_internal
+}  // namespace tcmalloc
+
+// Get all recorded allocation sites with their stack traces.
+// The sites vector will be populated with all recorded allocation sites.
+// Returns the number of unique allocation sites recorded.
+ABSL_ATTRIBUTE_WEAK size_t MallocExtension_Internal_GetAllocationSiteCount();
 }
 
 #endif

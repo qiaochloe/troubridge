@@ -25,6 +25,7 @@
 #include "absl/base/optimization.h"
 #include "absl/types/span.h"
 #include "tcmalloc/allocation_sample.h"
+#include "tcmalloc/allocation_site_recorder.h"
 #include "tcmalloc/arena.h"
 #include "tcmalloc/common.h"
 #include "tcmalloc/cpu_cache.h"
@@ -104,6 +105,7 @@ ABSL_CONST_INIT NumaTopology<kNumaPartitions, kNumBaseClasses>
     Static::numa_topology_;
 ABSL_CONST_INIT GwpAsanState Static::gwp_asan_state_;
 ABSL_CONST_INIT Static::PerSizeClassCounts Static::per_size_class_counts_;
+ABSL_CONST_INIT AllocationSiteRecorder Static::allocation_site_recorder_;
 TCMALLOC_ATTRIBUTE_NO_DESTROY ABSL_CONST_INIT
     SystemAllocator<NumaTopology<kNumaPartitions, kNumBaseClasses>>
         Static::system_allocator_{numa_topology_, kMinMmapAlloc};
@@ -134,7 +136,8 @@ size_t Static::metadata_bytes() {
       sizeof(sampled_alloc_handle_generator) + sizeof(peak_heap_tracker_) +
       sizeof(guardedpage_allocator_) + sizeof(numa_topology_) +
       sizeof(CacheTopology::Instance()) + sizeof(gwp_asan_state_) +
-      sizeof(per_size_class_counts_) + sizeof(system_allocator_);
+      sizeof(per_size_class_counts_) + sizeof(allocation_site_recorder_) +
+      sizeof(system_allocator_);
   // LINT.ThenChange(:static_vars)
 
   const size_t allocated = arena().stats().bytes_allocated +

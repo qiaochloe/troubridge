@@ -86,6 +86,7 @@
 #include "tcmalloc/alloc_at_least.h"
 #include "tcmalloc/allocation_sample.h"
 #include "tcmalloc/allocation_sampling.h"
+#include "tcmalloc/allocation_site_recorder.h"
 #include "tcmalloc/common.h"
 #include "tcmalloc/cpu_cache.h"
 #include "tcmalloc/deallocation_profiler.h"
@@ -279,6 +280,10 @@ extern "C" tcmalloc_internal::AllocationProfilingTokenBase*
 MallocExtension_Internal_StartLifetimeProfiling() {
   return new deallocationz::DeallocationSample(
       &tc_globals.deallocation_samples);
+}
+
+extern "C" size_t MallocExtension_Internal_GetAllocationSiteCount() {
+  return tc_globals.allocation_site_recorder().GetSiteCount();
 }
 
 MallocExtension::Ownership GetOwnership(const void* ptr) {
@@ -629,6 +634,9 @@ inline sized_ptr_t do_malloc_pages(size_t size, size_t weight, Policy policy) {
     auto ptr = SampleLargeAllocation(tc_globals, policy, size, weight, span);
     TC_CHECK_EQ(res.p, ptr.p);
   }
+
+  // Record allocation site with stack trace
+  tc_globals.allocation_site_recorder().RecordAllocation(size);
 
   return res;
 }
@@ -988,6 +996,8 @@ alloc_small_sampled_hooks_or_perthread(size_t size, size_t size_class,
     ptr = SampleSmallAllocation(tc_globals, policy, size, weight, size_class,
                                 ptr);
   }
+  // Record allocation site with stack trace
+  tc_globals.allocation_site_recorder().RecordAllocation(size);
   if (Policy::invoke_hooks()) {
     // TODO(b/273983652): Size returning tcmallocs call NewHooks with capacity
     // as requested_size
@@ -1077,6 +1087,9 @@ static inline Pointer ABSL_ATTRIBUTE_ALWAYS_INLINE fast_alloc(size_t size,
     SLOW_PATH_BARRIER();
     return slow_alloc_small(size, size_class, policy);
   }
+
+  // Record allocation site with stack trace
+  tc_globals.allocation_site_recorder().RecordAllocation(size);
 
   TC_ASSERT_NE(ret, nullptr);
   return Policy::to_pointer(ret, size_class);

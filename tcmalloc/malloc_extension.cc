@@ -27,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/base/attributes.h"
 #include "absl/base/call_once.h"
@@ -36,6 +37,7 @@
 #include "absl/time/time.h"
 #include "absl/types/optional.h"
 #include "absl/types/span.h"
+#include "tcmalloc/allocation_site_recorder.h"
 #include "tcmalloc/internal_malloc_extension.h"
 
 #if (defined(ABSL_HAVE_ADDRESS_SANITIZER) ||   \
@@ -638,6 +640,15 @@ MallocExtension::Ownership MallocExtension::GetOwnership(const void* p) {
              : tcmalloc::MallocExtension::Ownership::kNotOwned;
 #endif
   return MallocExtension::Ownership::kUnknown;
+}
+
+size_t MallocExtension::GetAllocationSiteCount() {
+#if ABSL_INTERNAL_HAVE_WEAK_MALLOCEXTENSION_STUBS
+  if (MallocExtension_Internal_GetAllocationSiteCount != nullptr) {
+    return MallocExtension_Internal_GetAllocationSiteCount();
+  }
+#endif
+  return 0;
 }
 
 std::map<std::string, MallocExtension::Property>

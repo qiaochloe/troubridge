@@ -27,6 +27,7 @@
 #include "absl/base/optimization.h"
 #include "absl/base/thread_annotations.h"
 #include "tcmalloc/allocation_sample.h"
+#include "tcmalloc/allocation_site_recorder.h"
 #include "tcmalloc/arena.h"
 #include "tcmalloc/central_freelist.h"
 #include "tcmalloc/common.h"
@@ -194,6 +195,10 @@ class Static final {
 
   static GwpAsanState& gwp_asan_state() { return gwp_asan_state_; }
 
+  static AllocationSiteRecorder& allocation_site_recorder() {
+    return allocation_site_recorder_;
+  }
+
   static SizeClassConfiguration size_class_configuration();
 
  private:
@@ -227,6 +232,7 @@ class Static final {
       numa_topology_;
   ABSL_CONST_INIT static GwpAsanState gwp_asan_state_;
   ABSL_CONST_INIT static PerSizeClassCounts per_size_class_counts_;
+  ABSL_CONST_INIT static AllocationSiteRecorder allocation_site_recorder_;
 
   // PageHeap uses a constructor for initialization.  Like the members above,
   // we can't depend on initialization order, so pageheap is new'd
