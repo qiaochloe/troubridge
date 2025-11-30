@@ -30,12 +30,11 @@ void AllocateFromFunction3(size_t size) {
 }
 
 TEST(AllocationSiteStatsTest, BasicUsage) {
-  // Make some allocations from different call sites
   AllocateFromFunction1();
-  AllocateFromFunction1();  // Same site, multiple times
+  AllocateFromFunction1();
   AllocateFromFunction2();
   AllocateFromFunction3(1000);
-  AllocateFromFunction3(2000);  // Same function, different sizes
+  AllocateFromFunction3(2000);
 
   // Get allocation site statistics
   std::string stats = MallocExtension::GetAllocationSiteStats();
@@ -53,7 +52,6 @@ TEST(AllocationSiteStatsTest, BasicUsage) {
               stats.find("allocation sites") != std::string::npos);
 
   // Verify we have at least one allocation site recorded
-  // (we made allocations from at least 3 different functions)
   size_t site_count = MallocExtension::GetAllocationSiteCount();
   EXPECT_GT(site_count, 0u);
 }
@@ -72,12 +70,10 @@ TEST(AllocationSiteStatsTest, MultipleAllocationsSameSite) {
 
   // Get stats
   std::string stats = MallocExtension::GetAllocationSiteStats();
-
-  // Should show this site with count = 10
   EXPECT_FALSE(stats.empty());
-  printf("\n=== Stats after 10 allocations from same site ===\n");
+  printf("\n=== Allocation Site Statistics ===\n");
   printf("%s\n", stats.c_str());
-  printf("================================================\n\n");
+  printf("===================================\n\n");
 }
 
 TEST(AllocationSiteStatsTest, DifferentSizes) {
@@ -92,9 +88,56 @@ TEST(AllocationSiteStatsTest, DifferentSizes) {
 
   // Should show min/max/average sizes
   EXPECT_FALSE(stats.empty());
-  printf("\n=== Stats with different allocation sizes ===\n");
+  printf("\n=== Allocation Site Statistics ===\n");
   printf("%s\n", stats.c_str());
-  printf("=============================================\n\n");
+  printf("===================================\n\n");
+}
+
+TEST(AllocationSiteStatsTest, Deduplication) {
+  constexpr int kNumAllocations = 20;
+  constexpr size_t kAllocSize = 100;
+  
+  std::vector<void*> ptrs;
+  ptrs.reserve(kNumAllocations);
+  
+  // Make multiple allocations from the exact same call site (same line)
+  for (int i = 0; i < kNumAllocations; ++i) {
+    ptrs.push_back(malloc(kAllocSize));
+  }
+
+  // Free all
+  for (void* ptr : ptrs) {
+    free(ptr);
+  }
+
+  // Get stats
+  std::string stats = MallocExtension::GetAllocationSiteStats();
+  EXPECT_FALSE(stats.empty());
+
+  // Should have one site with count = kNumAllocations
+  // Search for the allocation count in the output
+  std::string count_str = "Total allocations: " + std::to_string(kNumAllocations);
+  bool found_deduplicated = stats.find(count_str) != std::string::npos;
+  
+  // Also check that total bytes matches
+  size_t expected_total_bytes = kNumAllocations * kAllocSize;
+  std::string bytes_str = "Total bytes: " + std::to_string(expected_total_bytes);
+  bool found_correct_bytes = stats.find(bytes_str) != std::string::npos;
+
+  printf("\n=== Allocation Site Statistics ===\n");
+  printf("Expected: 1 site with %d allocations, %zu total bytes\n", 
+         kNumAllocations, expected_total_bytes);
+  printf("%s\n", stats.c_str());
+  printf("==========================\n\n");
+
+  // Verify deduplication occurred
+  EXPECT_TRUE(found_deduplicated || found_correct_bytes) 
+      << "Expected to find site with " << kNumAllocations 
+      << " allocations or " << expected_total_bytes << " total bytes";
+  
+  // Verify site count is reasonable
+  size_t site_count = MallocExtension::GetAllocationSiteCount();
+  EXPECT_GE(site_count, 1u);
 }
 
 }  // namespace
@@ -104,4 +147,3 @@ int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
-
