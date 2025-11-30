@@ -64,15 +64,22 @@ std::vector<AllocationSite> AllocationSiteRecorder::GetAllocationSites() const {
     size = sites_.size();
   }
   
-  // Allocate vector outside the lock to avoid deadlock
-  std::vector<AllocationSite> result;
-  result.reserve(size);
+  // Allocate vector with exact size outside the lock to avoid deadlock
+  std::vector<AllocationSite> result(size);
   
-  // Now copy data while holding the lock, but vector is already allocated
+  // Now copy data while holding the lock using indexing (no allocations)
   {
     absl::MutexLock lock(&mutex_);
+    size_t idx = 0;
     for (const auto& [trace, site] : sites_) {
-      result.push_back(site);
+      if (idx < result.size()) {
+        result[idx] = site;
+        idx++;
+      }
+    }
+    // Resize in case size changed (but this should be rare)
+    if (idx < result.size()) {
+      result.resize(idx);
     }
   }
   return result;
