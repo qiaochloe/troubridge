@@ -78,22 +78,33 @@ void AllocationSiteRecorder::Clear() {
 }
 
 void AllocationSiteRecorder::PrintStats(Printer& out) const {
-  absl::MutexLock lock(&mutex_);
-  
-  if (!IsEnabled()) {
-    out.printf("Allocation Site Recorder: DISABLED\n");
-    return;
-  }
+  // First, get a copy of all allocation sites while holding the lock
+  // This prevents deadlock when printing allocates memory
+  std::vector<AllocationSite> sites_copy;
+  {
+    absl::MutexLock lock(&mutex_);
+    
+    if (!IsEnabled()) {
+      out.printf("Allocation Site Recorder: DISABLED\n");
+      return;
+    }
 
-  if (sites_.empty()) {
-    out.printf("Allocation Site Recorder: No allocation sites recorded\n");
-    return;
-  }
+    if (sites_.empty()) {
+      out.printf("Allocation Site Recorder: No allocation sites recorded\n");
+      return;
+    }
+
+    // Copy all sites while holding the lock
+    sites_copy.reserve(sites_.size());
+    for (const auto& [trace, site] : sites_) {
+      sites_copy.push_back(site);
+    }
+  }  // Release lock before printing (printing may allocate memory)
 
   // Sort sites by total_bytes (descending) for better readability
   std::vector<const AllocationSite*> sorted_sites;
-  sorted_sites.reserve(sites_.size());
-  for (const auto& [trace, site] : sites_) {
+  sorted_sites.reserve(sites_copy.size());
+  for (const auto& site : sites_copy) {
     sorted_sites.push_back(&site);
   }
   std::sort(sorted_sites.begin(), sorted_sites.end(),
@@ -103,7 +114,7 @@ void AllocationSiteRecorder::PrintStats(Printer& out) const {
 
   out.printf("\n------------------------------------------------\n");
   out.printf("Allocation Site Recorder Statistics\n");
-  out.printf("Total unique allocation sites: %zu\n", sites_.size());
+  out.printf("Total unique allocation sites: %zu\n", sites_copy.size());
   out.printf("------------------------------------------------\n\n");
 
   constexpr double kMiB = 1024.0 * 1024.0;
