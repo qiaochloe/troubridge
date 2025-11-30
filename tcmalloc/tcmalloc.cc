@@ -286,6 +286,15 @@ extern "C" size_t MallocExtension_Internal_GetAllocationSiteCount() {
   return tc_globals.allocation_site_recorder().GetSiteCount();
 }
 
+// Low-level function that does the actual printing
+extern "C" size_t TCMalloc_Internal_GetAllocationSiteStats(char* buffer,
+                                                           size_t buffer_length) {
+  Printer printer(buffer, buffer_length);
+  tc_globals.allocation_site_recorder().PrintStats(printer);
+  return printer.SpaceRequired();
+}
+
+// High-level function that handles buffer resizing
 extern "C" void MallocExtension_Internal_GetAllocationSiteStats(std::string* ret) {
   size_t shift = std::max<size_t>(22, absl::bit_width(ret->capacity()) - 1);
   for (; shift < 24; shift++) {
@@ -301,13 +310,6 @@ extern "C" void MallocExtension_Internal_GetAllocationSiteStats(std::string* ret
       break;
     }
   }
-}
-
-extern "C" size_t TCMalloc_Internal_GetAllocationSiteStats(char* buffer,
-                                                           size_t buffer_length) {
-  Printer printer(buffer, buffer_length);
-  tc_globals.allocation_site_recorder().PrintStats(printer);
-  return printer.SpaceRequired();
 }
 
 MallocExtension::Ownership GetOwnership(const void* ptr) {
