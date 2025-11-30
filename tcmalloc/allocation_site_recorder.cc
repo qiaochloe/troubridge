@@ -58,11 +58,22 @@ void AllocationSiteRecorder::RecordAllocation(size_t size) {
 }
 
 std::vector<AllocationSite> AllocationSiteRecorder::GetAllocationSites() const {
-  absl::MutexLock lock(&mutex_);
+  size_t size;
+  {
+    absl::MutexLock lock(&mutex_);
+    size = sites_.size();
+  }
+  
+  // Allocate vector outside the lock to avoid deadlock
   std::vector<AllocationSite> result;
-  result.reserve(sites_.size());
-  for (const auto& [trace, site] : sites_) {
-    result.push_back(site);
+  result.reserve(size);
+  
+  // Now copy data while holding the lock, but vector is already allocated
+  {
+    absl::MutexLock lock(&mutex_);
+    for (const auto& [trace, site] : sites_) {
+      result.push_back(site);
+    }
   }
   return result;
 }
@@ -78,32 +89,23 @@ void AllocationSiteRecorder::Clear() {
 }
 
 void AllocationSiteRecorder::PrintStats(Printer& out) const {
-  // First, get a copy of all allocation sites while holding the lock
-  // This prevents deadlock when printing allocates memory
-  std::vector<AllocationSite> sites_copy;
-  {
-    absl::MutexLock lock(&mutex_);
-    
-    if (!IsEnabled()) {
-      out.printf("Allocation Site Recorder: DISABLED\n");
-      return;
-    }
+  // Use GetAllocationSites() which safely copies data while holding the lock
+  // and releases it before returning, preventing deadlock
+  std::vector<AllocationSite> sites_copy = GetAllocationSites();
+  
+  if (!IsEnabled()) {
+    out.printf("Allocation Site Recorder: DISABLED\n");
+    return;
+  }
 
-    if (sites_.empty()) {
-      out.printf("Allocation Site Recorder: No allocation sites recorded\n");
-      return;
-    }
-
-    // Copy all sites while holding the lock
-    sites_copy.reserve(sites_.size());
-    for (const auto& [trace, site] : sites_) {
-      sites_copy.push_back(site);
-    }
-  }  // Release lock before printing (printing may allocate memory)
+  if (sites_copy.empty()) {
+    out.printf("Allocation Site Recorder: No allocation sites recorded\n");
+    return;
+  }
 
   // Sort sites by total_bytes (descending) for better readability
+  // Don't reserve - avoid allocations that could trigger RecordAllocation
   std::vector<const AllocationSite*> sorted_sites;
-  sorted_sites.reserve(sites_copy.size());
   for (const auto& site : sites_copy) {
     sorted_sites.push_back(&site);
   }
