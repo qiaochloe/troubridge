@@ -155,6 +155,10 @@ class AllocationSiteRecorder;
 // The sites vector will be populated with all recorded allocation sites.
 // Returns the number of unique allocation sites recorded.
 ABSL_ATTRIBUTE_WEAK size_t MallocExtension_Internal_GetAllocationSiteCount();
+
+// Gets a human readable description of all recorded allocation sites.
+// The stats string will be populated with allocation site statistics.
+ABSL_ATTRIBUTE_WEAK void MallocExtension_Internal_GetAllocationSiteStats(std::string* stats);
 }
 
 #endif

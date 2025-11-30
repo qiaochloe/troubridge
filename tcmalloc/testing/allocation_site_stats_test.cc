@@ -30,10 +30,6 @@ void AllocateFromFunction3(size_t size) {
 }
 
 TEST(AllocationSiteStatsTest, BasicUsage) {
-  // Enable allocation site recorder (it's enabled by default, but let's be explicit)
-  // Note: In real tests, you might want to disable it to avoid affecting other tests
-  // For this demo, we'll keep it enabled
-
   // Make some allocations from different call sites
   AllocateFromFunction1();
   AllocateFromFunction1();  // Same site, multiple times

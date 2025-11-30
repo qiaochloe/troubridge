@@ -286,6 +286,30 @@ extern "C" size_t MallocExtension_Internal_GetAllocationSiteCount() {
   return tc_globals.allocation_site_recorder().GetSiteCount();
 }
 
+extern "C" void MallocExtension_Internal_GetAllocationSiteStats(std::string* ret) {
+  size_t shift = std::max<size_t>(22, absl::bit_width(ret->capacity()) - 1);
+  for (; shift < 24; shift++) {
+    const size_t size = 1 << shift;
+    // Double ret's size until we succeed in writing the buffer without
+    // truncation.
+    ret->resize(size - 1);
+
+    size_t written_size = TCMalloc_Internal_GetAllocationSiteStats(&*ret->begin(), size - 1);
+    if (written_size < size - 1) {
+      // We did not truncate.
+      ret->resize(written_size);
+      break;
+    }
+  }
+}
+
+extern "C" size_t TCMalloc_Internal_GetAllocationSiteStats(char* buffer,
+                                                           size_t buffer_length) {
+  Printer printer(buffer, buffer_length);
+  tc_globals.allocation_site_recorder().PrintStats(printer);
+  return printer.SpaceRequired();
+}
+
 MallocExtension::Ownership GetOwnership(const void* ptr) {
   const PageId p = PageIdContainingTagged(ptr);
   return tc_globals.pagemap().GetDescriptor(p)

@@ -37,9 +37,7 @@
 #include "absl/time/time.h"
 #include "absl/types/optional.h"
 #include "absl/types/span.h"
-#include "tcmalloc/internal/logging.h"
 #include "tcmalloc/internal_malloc_extension.h"
-#include "tcmalloc/static_vars.h"
 
 #if (defined(ABSL_HAVE_ADDRESS_SANITIZER) ||   \
      defined(ABSL_HAVE_MEMORY_SANITIZER) ||    \
@@ -221,24 +219,9 @@ void* AddressRegionFactory::MallocInternal(size_t size) {
 
 std::string MallocExtension::GetAllocationSiteStats() {
 #if ABSL_INTERNAL_HAVE_WEAK_MALLOCEXTENSION_STUBS
-  if (&TCMalloc_Internal_GetStats != nullptr) {
+  if (&MallocExtension_Internal_GetAllocationSiteStats != nullptr) {
     std::string ret;
-    size_t shift = std::max<size_t>(22, absl::bit_width(ret.capacity()) - 1);
-    for (; shift < 24; shift++) {
-      const size_t size = 1 << shift;
-      ret.resize(size - 1);
-
-      char* buffer = &*ret.begin();
-      size_t buffer_length = size - 1;
-      tcmalloc::tcmalloc_internal::Printer printer(buffer, buffer_length);
-      tcmalloc::tcmalloc_internal::tc_globals.allocation_site_recorder().PrintStats(printer);
-
-      size_t written_size = printer.SpaceRequired();
-      if (written_size < size - 1) {
-        ret.resize(written_size);
-        break;
-      }
-    }
+    MallocExtension_Internal_GetAllocationSiteStats(&ret);
     return ret;
   }
 #endif
