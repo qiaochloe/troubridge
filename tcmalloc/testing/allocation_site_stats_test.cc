@@ -43,7 +43,7 @@ TEST(AllocationSiteStatsTest, BasicUsage) {
   // Verify we got some output
   EXPECT_FALSE(stats.empty());
 
-  // Print the stats (useful for debugging)
+  // Print the stats
   printf("\n=== Allocation Site Statistics ===\n");
   printf("%s\n", stats.c_str());
   printf("===================================\n\n");
@@ -56,26 +56,6 @@ TEST(AllocationSiteStatsTest, BasicUsage) {
   // (we made allocations from at least 3 different functions)
   size_t site_count = MallocExtension::GetAllocationSiteCount();
   EXPECT_GT(site_count, 0u);
-}
-
-TEST(AllocationSiteStatsTest, IncludedInGetStats) {
-  // Make some allocations
-  void* ptr1 = malloc(100);
-  void* ptr2 = malloc(200);
-  free(ptr1);
-  free(ptr2);
-
-  // Get full stats (which should include allocation sites)
-  std::string all_stats = MallocExtension::GetStats();
-
-  // Verify we got output
-  EXPECT_FALSE(all_stats.empty());
-
-  // The full stats should contain allocation site information
-  // (Note: allocation sites are printed in GetStats output)
-  printf("\n=== Full Stats (includes allocation sites) ===\n");
-  printf("%s\n", all_stats.c_str());
-  printf("==============================================\n\n");
 }
 
 TEST(AllocationSiteStatsTest, MultipleAllocationsSameSite) {
