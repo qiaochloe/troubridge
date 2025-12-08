@@ -22,22 +22,21 @@ ABSL_CONST_INIT static thread_local bool recording_free = false;
 
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
-    recording_free = true;
-    absl::MutexLock lock(&freed_allocations_mutex_);
-    for (auto& [trace, site] : sites_) {
-      if (site.latest_allocation != nullptr) {
-        if (freed_allocations_.find(site.latest_allocation) != freed_allocations_.end()) {
-          freed_allocations_.erase(site.latest_allocation);
-          site.latest_allocation = nullptr;
-        } else {
-          if (accessed_recently(site.latest_allocation)) {
+    {
+      absl::MutexLock lockm(&mutex_);
+      absl::MutexLock lock(&freed_allocations_mutex_);
+      for (auto& [trace, site] : sites_) {
+        if (site.latest_allocation != nullptr) {
+          if (freed_allocations_.find(site.latest_allocation) != freed_allocations_.end()) {
+            freed_allocations_.erase(site.latest_allocation);
+            site.latest_allocation = nullptr;
+          } else {
             site.sampled_accesses++;
+            site.sampled_intervals++;
           }
-          site.sampled_intervals++;
         }
       }
     }
-    recording_free = false;
     absl::SleepFor(absl::Milliseconds(200));
   }
 }
@@ -52,6 +51,7 @@ void AllocationSiteRecorder::RecordAllocation(size_t size, void* allocated_addre
     std::thread tracking_thread([this]() { PeriodicMemoryAccessTracking(); });
     tracking_thread.detach();
   }
+
 
   // Prevent reentrant calls - if we're already inside RecordAllocation(),
   // skip this call to avoid deadlock when hash map operations trigger
@@ -94,6 +94,7 @@ void AllocationSiteRecorder::RecordFree(void* freed_address) {
   recording_free = true;
   absl::MutexLock lock(&freed_allocations_mutex_);
   if (freed_allocations_.bucket_count() == 0) {
+    recording_free = false;
     return;
   }
   freed_allocations_.insert(freed_address);
