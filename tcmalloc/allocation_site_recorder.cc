@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <vector>
 #include <thread>
 
@@ -20,9 +21,21 @@ ABSL_CONST_INIT static thread_local bool recording_allocation = false;
 
 ABSL_CONST_INIT static thread_local bool recording_free = false;
 
+// Static pointer to the recorder for the atexit handler to call Shutdown().
+// This is set when the tracking thread is created.
+static AllocationSiteRecorder* g_recorder_for_shutdown = nullptr;
+
+// atexit handler to shut down the recorder before cleanup runs.
+static void ShutdownRecorderAtExit() {
+  if (g_recorder_for_shutdown != nullptr) {
+    g_recorder_for_shutdown->Shutdown();
+  }
+}
+
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
     {
+      recording_free = true;
       absl::MutexLock lockm(&mutex_);
       absl::MutexLock lock(&freed_allocations_mutex_);
       for (auto& [trace, site] : sites_) {
@@ -36,6 +49,7 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
           }
         }
       }
+      recording_free = false;
     }
     absl::SleepFor(absl::Milliseconds(200));
   }
@@ -48,6 +62,10 @@ void AllocationSiteRecorder::RecordAllocation(size_t size, void* allocated_addre
 
   if (!made_tracking_thread_) {
     made_tracking_thread_ = true;
+    // Register the atexit handler to shut down before cleanup runs.
+    // This prevents RecordFree from inserting into destroyed data structures.
+    g_recorder_for_shutdown = this;
+    std::atexit(ShutdownRecorderAtExit);
     std::thread tracking_thread([this]() { PeriodicMemoryAccessTracking(); });
     tracking_thread.detach();
   }
@@ -88,16 +106,24 @@ void AllocationSiteRecorder::RecordAllocation(size_t size, void* allocated_addre
 }
 
 void AllocationSiteRecorder::RecordFree(void* freed_address) {
+  // Check shutdown flag first - during program cleanup, data structures may be
+  // destroyed or in an invalid state, so skip all operations.
+  if (IsShuttingDown()) {
+    return;
+  }
   if (recording_free) {
     return;
   }
   recording_free = true;
+  recording_allocation = true;
   absl::MutexLock lock(&freed_allocations_mutex_);
   if (freed_allocations_.bucket_count() == 0) {
     recording_free = false;
+    recording_allocation = false;
     return;
   }
   freed_allocations_.insert(freed_address);
+  recording_allocation = false;
   recording_free = false;
 }
 

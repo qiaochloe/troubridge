@@ -76,6 +76,13 @@ class AllocationSiteRecorder {
   void RecordFree(void* freed_address);
   void PeriodicMemoryAccessTracking();
 
+  // Signal that the recorder is shutting down - prevents RecordFree operations
+  // during program cleanup when data structures may be in an invalid state.
+  void Shutdown() { shutting_down_.store(true, std::memory_order_release); }
+
+  // Check if the recorder is shutting down.
+  bool IsShuttingDown() const { return shutting_down_.load(std::memory_order_acquire); }
+
  private:
   // Hash function for stack traces.
   struct StackTraceHash {
@@ -108,6 +115,9 @@ class AllocationSiteRecorder {
   std::unordered_set<void*> freed_allocations_ ABSL_GUARDED_BY(freed_allocations_mutex_);
   std::atomic<bool> enabled_{true};
   std::atomic<bool> made_tracking_thread_{false};
+  // Flag to indicate shutdown - prevents RecordFree from inserting during cleanup
+  // when the unordered_set may be in an invalid state
+  std::atomic<bool> shutting_down_{false};
 };
 
 }  // namespace tcmalloc_internal
