@@ -107,7 +107,7 @@ class AllocationSiteRecorder {
       ABSL_GUARDED_BY(mutex_);
   std::unordered_set<void*> freed_allocations_ ABSL_GUARDED_BY(freed_allocations_mutex_);
   std::atomic<bool> enabled_{true};
-  bool made_tracking_thread_ = false;
+  std::atomic<bool> made_tracking_thread_{false};
 };
 
 }  // namespace tcmalloc_internal
