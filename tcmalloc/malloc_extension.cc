@@ -228,6 +228,17 @@ std::string MallocExtension::GetAllocationSiteStats() {
   return "";
 }
 
+std::string MallocExtension::GetMachineLearningAllocationSiteStats() {
+  #if ABSL_INTERNAL_HAVE_WEAK_MALLOCEXTENSION_STUBS
+    if (&MallocExtension_Internal_GetMachineLearningAllocationSiteStats != nullptr) {
+      std::string ret;
+      MallocExtension_Internal_GetMachineLearningAllocationSiteStats(&ret);
+      return ret;
+    }
+  #endif
+    return "";
+  }
+
 std::string MallocExtension::GetStats() {
 #if ABSL_INTERNAL_HAVE_WEAK_MALLOCEXTENSION_STUBS
   if (&MallocExtension_Internal_GetStats != nullptr) {

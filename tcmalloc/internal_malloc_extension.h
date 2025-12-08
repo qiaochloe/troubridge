@@ -159,6 +159,9 @@ ABSL_ATTRIBUTE_WEAK size_t MallocExtension_Internal_GetAllocationSiteCount();
 // Gets a human readable description of all recorded allocation sites.
 // The stats string will be populated with allocation site statistics.
 ABSL_ATTRIBUTE_WEAK void MallocExtension_Internal_GetAllocationSiteStats(std::string* stats);
+
+// Gets a machine-learning friendly description of all recorded allocation sites.
+ABSL_ATTRIBUTE_WEAK void MallocExtension_Internal_GetMachineLearningAllocationSiteStats(std::string* stats);
 }
 
 #endif

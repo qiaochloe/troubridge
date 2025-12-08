@@ -27,10 +27,16 @@ struct AllocationSite {
   size_t total_bytes = 0;      // Total bytes allocated at this site
   size_t min_size = SIZE_MAX;  // Minimum allocation size
   size_t max_size = 0;         // Maximum allocation size
+  void *latest_allocation = nullptr; // Latest allocation address, used for access frequency tracking
+  size_t sampled_intervals = 0; // Number of intervals sampled on this site with an active latest allocation
+  size_t sampled_accesses = 0; // Number of accesses to the latest allocation
+
 
   AllocationSite() = default;
   AllocationSite(const StackTrace& trace, size_t size)
-      : stack_trace(trace), total_count(1), total_bytes(size), min_size(size), max_size(size) {}
+      : stack_trace(trace), total_count(1), total_bytes(size), min_size(size), max_size(size), latest_allocation(nullptr), sampled_intervals(0), sampled_accesses(0) {}
+  AllocationSite(const StackTrace& trace, size_t size, void* allocated_address)
+      : stack_trace(trace), total_count(1), total_bytes(size), min_size(size), max_size(size), latest_allocation(allocated_address), sampled_intervals(0), sampled_accesses(0) {}
 };
 
 // Records all allocation sites with their stack traces.
@@ -42,7 +48,7 @@ class AllocationSiteRecorder {
 
   // Record an allocation at the current call site.
   // Captures the stack trace and records statistics.
-  void RecordAllocation(size_t size) ABSL_LOCKS_EXCLUDED(mutex_);
+  void RecordAllocation(size_t size, void* allocated_address) ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Get all recorded allocation sites.
   // Returns a copy of all allocation sites (for thread safety).
@@ -63,6 +69,12 @@ class AllocationSiteRecorder {
   // Print all recorded allocation sites to the printer.
   // Similar to MallocExtension::GetStats() format.
   void PrintStats(Printer& out) const ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // Print machine-learning friendly allocation sites to the printer.
+  void PrintMachineLearningStats(Printer& out) const ABSL_LOCKS_EXCLUDED(mutex_);
+
+  void RecordFree(void* freed_address);
+  void PeriodicMemoryAccessTracking();
 
  private:
   // Hash function for stack traces.
@@ -90,9 +102,12 @@ class AllocationSiteRecorder {
   };
 
   mutable absl::Mutex mutex_;
+  mutable absl::Mutex freed_allocations_mutex_;
   absl::flat_hash_map<StackTrace, AllocationSite, StackTraceHash, StackTraceEqual> sites_
       ABSL_GUARDED_BY(mutex_);
+  std::unordered_set<void*> freed_allocations_ ABSL_GUARDED_BY(freed_allocations_mutex_);
   std::atomic<bool> enabled_{true};
+  bool made_tracking_thread_ = false;
 };
 
 }  // namespace tcmalloc_internal

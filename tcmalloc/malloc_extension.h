@@ -377,6 +377,9 @@ class MallocExtension final {
   // counts, and byte totals for each unique allocation site.
   [[nodiscard]] static std::string GetAllocationSiteStats();
 
+  // Gets a machine-learning friendly description of all recorded allocation sites.
+  [[nodiscard]] static std::string GetMachineLearningAllocationSiteStats();
+
   // -------------------------------------------------------------------
   // Control operations for getting malloc implementation specific parameters.
   // Some currently useful properties:

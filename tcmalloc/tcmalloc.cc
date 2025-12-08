@@ -312,6 +312,32 @@ extern "C" void MallocExtension_Internal_GetAllocationSiteStats(std::string* ret
   }
 }
 
+// Low-level function that does the actual printing
+extern "C" size_t TCMalloc_Internal_GetMachineLearningAllocationSiteStats(char* buffer,
+  size_t buffer_length) {
+Printer printer(buffer, buffer_length);
+tc_globals.allocation_site_recorder().PrintMachineLearningStats(printer);
+return printer.SpaceRequired();
+}
+
+// High-level function that handles buffer resizing
+extern "C" void MallocExtension_Internal_GetMachineLearningAllocationSiteStats(std::string* ret) {
+  size_t shift = std::max<size_t>(22, absl::bit_width(ret->capacity()) - 1);
+  for (; shift < 24; shift++) {
+    const size_t size = 1 << shift;
+    // Double ret's size until we succeed in writing the buffer without
+    // truncation.
+    ret->resize(size - 1);
+
+    size_t written_size = TCMalloc_Internal_GetMachineLearningAllocationSiteStats(&*ret->begin(), size - 1);
+    if (written_size < size - 1) {
+      // We did not truncate.
+      ret->resize(written_size);
+      break;
+    }
+  }
+}
+
 MallocExtension::Ownership GetOwnership(const void* ptr) {
   const PageId p = PageIdContainingTagged(ptr);
   return tc_globals.pagemap().GetDescriptor(p)
@@ -662,7 +688,7 @@ inline sized_ptr_t do_malloc_pages(size_t size, size_t weight, Policy policy) {
   }
 
   // Record allocation site with stack trace
-  tc_globals.allocation_site_recorder().RecordAllocation(size);
+  tc_globals.allocation_site_recorder().RecordAllocation(size, res.p);
 
   return res;
 }
@@ -771,6 +797,7 @@ inline ABSL_ATTRIBUTE_ALWAYS_INLINE void do_free(void* ptr, Policy policy) {
   // ptr must be a result of a previous malloc/memalign/... call, and
   // therefore static initialization must have already occurred.
   TC_ASSERT(tc_globals.IsInited());
+  tc_globals.allocation_site_recorder().RecordFree(ptr);
 
   size_t size_class = tc_globals.pagemap().sizeclass(PageIdContaining(ptr));
   if (ABSL_PREDICT_TRUE(size_class != 0)) {
@@ -815,6 +842,7 @@ inline ABSL_ATTRIBUTE_ALWAYS_INLINE void do_free_with_size(void* ptr,
   //
   // The optimized path doesn't work with non-normal objects (sampled, cold),
   // whose deletions trigger more operations and require to visit metadata.
+  tc_globals.allocation_site_recorder().RecordFree(ptr);
   if (ABSL_PREDICT_FALSE(!IsNormalMemory(ptr))) {
     if (ABSL_PREDICT_FALSE(ptr == nullptr)) {
       return;
@@ -1023,7 +1051,7 @@ alloc_small_sampled_hooks_or_perthread(size_t size, size_t size_class,
                                 ptr);
   }
   // Record allocation site with stack trace
-  tc_globals.allocation_site_recorder().RecordAllocation(size);
+  tc_globals.allocation_site_recorder().RecordAllocation(size, ptr.p);
   if (Policy::invoke_hooks()) {
     // TODO(b/273983652): Size returning tcmallocs call NewHooks with capacity
     // as requested_size
@@ -1115,7 +1143,7 @@ static inline Pointer ABSL_ATTRIBUTE_ALWAYS_INLINE fast_alloc(size_t size,
   }
 
   // Record allocation site with stack trace
-  tc_globals.allocation_site_recorder().RecordAllocation(size);
+  tc_globals.allocation_site_recorder().RecordAllocation(size, ret);
 
   TC_ASSERT_NE(ret, nullptr);
   return Policy::to_pointer(ret, size_class);
