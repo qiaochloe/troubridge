@@ -22,7 +22,6 @@ ABSL_CONST_INIT static thread_local bool recording_free = false;
 
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
-    absl::SleepFor(absl::Seconds(1));
     recording_free = true;
     absl::MutexLock lock(&freed_allocations_mutex_);
     for (auto& [trace, site] : sites_) {
@@ -31,12 +30,15 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
           freed_allocations_.erase(site.latest_allocation);
           site.latest_allocation = nullptr;
         } else {
-          site.sampled_accesses++;
+          if (accessed_recently(site.latest_allocation)) {
+            site.sampled_accesses++;
+          }
           site.sampled_intervals++;
         }
       }
-    } 
+    }
     recording_free = false;
+    absl::SleepFor(absl::Milliseconds(200));
   }
 }
 
