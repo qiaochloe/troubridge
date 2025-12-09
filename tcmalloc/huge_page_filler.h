@@ -2164,10 +2164,11 @@ inline Length HugePageFiller<TrackerType>::ReleaseCandidates(
     // released state.
     if (best->was_released() && best->released()) {
       best->set_was_released(/*status=*/false);
+      const size_t hotness_idx = static_cast<size_t>(best->hotness_class());
       if (best->HasDenseSpans()) {
-        --n_was_released_[AccessDensityPrediction::kDense];
+        --n_was_released_[hotness_idx][AccessDensityPrediction::kDense];
       } else {
-        --n_was_released_[AccessDensityPrediction::kSparse];
+        --n_was_released_[hotness_idx][AccessDensityPrediction::kSparse];
       }
     }
   }
@@ -2444,8 +2445,8 @@ inline HugePageFillerStats HugePageFiller<TrackerType>::GetStats() const {
   stats.n_total[AccessDensityPrediction::kSparse] = donated_alloc_.size();
   for (const AccessDensityPrediction count :
        {AccessDensityPrediction::kSparse, AccessDensityPrediction::kDense}) {
-    stats.n_fully_released[count] = 0;
-    stats.n_partial_released[count] = 0;
+    stats.n_fully_released[count] = NHugePages(0);
+    stats.n_partial_released[count] = NHugePages(0);
     for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
       stats.n_fully_released[count] += regular_alloc_released_[h][count].size();
       stats.n_partial_released[count] +=
@@ -2458,7 +2459,7 @@ inline HugePageFillerStats HugePageFiller<TrackerType>::GetStats() const {
       total_regular += regular_alloc_[h][count].size().in_pages();
     }
     stats.n_total[count] +=
-        stats.n_released[count] + NHugePages(total_regular);
+        stats.n_released[count] + NHugePages(total_regular.raw_num() / kPagesPerHugePage.raw_num());
     stats.n_partial[count] =
         stats.n_total[count] - stats.n_released[count] - stats.n_full[count];
   }
