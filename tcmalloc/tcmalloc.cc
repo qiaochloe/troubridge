@@ -645,9 +645,20 @@ inline sized_ptr_t do_malloc_pages(size_t size, size_t weight, Policy policy) {
   } else if (tc_globals.numa_topology().numa_aware()) {
     tag = NumaNormalTag(policy.numa_partition());
   }
+
+  // Capture stack trace for hotness prediction
+  StackTrace trace = {};
+  trace.depth = absl::GetStackTrace(trace.stack, kMaxStackDepth, 2);
+  trace.requested_size = size;
+  trace.allocated_size = size;
+
+  SpanAllocInfo span_alloc_info;
+  span_alloc_info.objects_per_span = 1;
+  span_alloc_info.density = AccessDensityPrediction::kSparse;
+  span_alloc_info.stack_trace = &trace;
+
   Span* span = tc_globals.page_allocator().NewAligned(
-      num_pages, BytesToLengthCeil(policy.align()),
-      {1, AccessDensityPrediction::kSparse}, tag);
+      num_pages, BytesToLengthCeil(policy.align()), span_alloc_info, tag);
   if (span == nullptr) return {nullptr, 0};
 
   // Set capacity to the exact size for a page allocation.  This needs to be

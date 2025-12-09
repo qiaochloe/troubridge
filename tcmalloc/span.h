@@ -62,6 +62,7 @@ enum AccessDensityPrediction {
 struct SpanAllocInfo {
   size_t objects_per_span;
   AccessDensityPrediction density;
+  const StackTrace* stack_trace = nullptr;
 };
 
 // Information kept for a span (a contiguous run of pages).

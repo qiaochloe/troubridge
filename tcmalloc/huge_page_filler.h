@@ -64,6 +64,22 @@ GOOGLE_MALLOC_SECTION_BEGIN
 namespace tcmalloc {
 namespace tcmalloc_internal {
 
+// Hotness classes for access-frequency-aware allocation.
+enum class HotnessClass : uint8_t {
+  kCold = 0,
+  kWarm = 1,
+  kHot = 2,
+  kCount = 3
+};
+
+// Predicts the hotness class for an allocation based on stack trace and size.
+inline HotnessClass HotnessPredictor(const StackTrace* stack_trace,
+                                      size_t allocation_size) {
+  (void)stack_trace;
+  (void)allocation_size;
+  return HotnessClass::kCold;
+}
+
 // Thresholds that determine collapse backoff behavior.
 constexpr absl::Duration kMaxCollapseLatencyThreshold = absl::Milliseconds(30);
 constexpr absl::Duration kMinCollapseLatencyThreshold = absl::Milliseconds(15);
@@ -294,6 +310,10 @@ class PageTracker : public TList<PageTracker>::Elem {
   void SetAnonVmaName(MemoryTagFunction& set_anon_vma_name,
                       std::optional<absl::string_view> name);
 
+  // Hotness class for access-frequency-aware allocation.
+  HotnessClass hotness_class() const { return hotness_class_; }
+  void set_hotness_class(HotnessClass h) { hotness_class_ = h; }
+
   struct NativePageResidencyInfo {
     size_t n_free_swapped;
     size_t n_free_unbacked;
@@ -326,6 +346,7 @@ class PageTracker : public TList<PageTracker>::Elem {
   RangeTracker<kPagesPerHugePage.raw_num()> free_;
 
   uint64_t num_objects_;
+  HotnessClass hotness_class_ = HotnessClass::kCold;
 
   TrackerFeatures features_;
 
@@ -1058,38 +1079,50 @@ class HugePageFiller {
   Length unmapped_pages() const { return unmapped_; }
   Length free_pages() const;
   Length used_pages_in_released() const {
-    TC_ASSERT_LE(n_used_released_[AccessDensityPrediction::kSparse],
-                 regular_alloc_released_[AccessDensityPrediction::kSparse]
-                     .size()
-                     .in_pages());
-    TC_ASSERT_LE(n_used_released_[AccessDensityPrediction::kDense],
-                 regular_alloc_released_[AccessDensityPrediction::kDense]
-                     .size()
-                     .in_pages());
-    return n_used_released_[AccessDensityPrediction::kDense] +
-           n_used_released_[AccessDensityPrediction::kSparse];
+    Length total = Length(0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      TC_ASSERT_LE(n_used_released_[h][AccessDensityPrediction::kSparse],
+                   regular_alloc_released_[h][AccessDensityPrediction::kSparse]
+                       .size()
+                       .in_pages());
+      TC_ASSERT_LE(n_used_released_[h][AccessDensityPrediction::kDense],
+                   regular_alloc_released_[h][AccessDensityPrediction::kDense]
+                       .size()
+                       .in_pages());
+      total += n_used_released_[h][AccessDensityPrediction::kDense] +
+               n_used_released_[h][AccessDensityPrediction::kSparse];
+    }
+    return total;
   }
   Length used_pages_in_partial_released() const {
-    TC_ASSERT_LE(
-        n_used_partial_released_[AccessDensityPrediction::kSparse],
-        regular_alloc_partial_released_[AccessDensityPrediction::kSparse]
-            .size()
-            .in_pages());
-    TC_ASSERT_LE(
-        n_used_partial_released_[AccessDensityPrediction::kDense],
-        regular_alloc_partial_released_[AccessDensityPrediction::kDense]
-            .size()
-            .in_pages());
-    return n_used_partial_released_[AccessDensityPrediction::kDense] +
-           n_used_partial_released_[AccessDensityPrediction::kSparse];
+    Length total = Length(0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      TC_ASSERT_LE(
+          n_used_partial_released_[h][AccessDensityPrediction::kSparse],
+          regular_alloc_partial_released_[h][AccessDensityPrediction::kSparse]
+              .size()
+              .in_pages());
+      TC_ASSERT_LE(
+          n_used_partial_released_[h][AccessDensityPrediction::kDense],
+          regular_alloc_partial_released_[h][AccessDensityPrediction::kDense]
+              .size()
+              .in_pages());
+      total += n_used_partial_released_[h][AccessDensityPrediction::kDense] +
+               n_used_partial_released_[h][AccessDensityPrediction::kSparse];
+    }
+    return total;
   }
   Length used_pages_in_any_subreleased() const {
     return used_pages_in_released() + used_pages_in_partial_released();
   }
 
   HugeLength previously_released_huge_pages() const {
-    return n_was_released_[AccessDensityPrediction::kDense] +
-           n_was_released_[AccessDensityPrediction::kSparse];
+    HugeLength total = NHugePages(0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      total += n_was_released_[h][AccessDensityPrediction::kDense] +
+               n_was_released_[h][AccessDensityPrediction::kSparse];
+    }
+    return total;
   }
 
   Length FreePagesInPartialAllocs() const;
@@ -1212,8 +1245,10 @@ class HugePageFiller {
   static constexpr size_t kNumLists = kPagesPerHugePage.raw_num() * kChunks;
 
   // List of hugepages from which no pages have been released to the OS.
+  // Partitioned by hotness class and access density.
   PageTrackerLists<kNumLists>
-      regular_alloc_[AccessDensityPrediction::kPredictionCounts];
+      regular_alloc_[static_cast<size_t>(HotnessClass::kCount)]
+                    [AccessDensityPrediction::kPredictionCounts];
   PageTrackerLists<kPagesPerHugePage.raw_num()> donated_alloc_;
   // Partially released ones that we are trying to release.
   //
@@ -1224,9 +1259,11 @@ class HugePageFiller {
   // either allocated or returned to the OS.  There are no pages that are free,
   // but not returned to the OS.
   PageTrackerLists<kNumLists> regular_alloc_partial_released_
+      [static_cast<size_t>(HotnessClass::kCount)]
       [AccessDensityPrediction::kPredictionCounts];
   PageTrackerLists<kNumLists>
-      regular_alloc_released_[AccessDensityPrediction::kPredictionCounts];
+      regular_alloc_released_[static_cast<size_t>(HotnessClass::kCount)]
+                            [AccessDensityPrediction::kPredictionCounts];
 
   // Records a list of fully freed trackers. We might end up with trackers that
   // are fully freed, but not deleted, when: the trackers are being userspace-
@@ -1239,13 +1276,16 @@ class HugePageFiller {
 
   // n_used_released_ contains the number of pages in huge pages that are not
   // free (i.e., allocated).  Only the hugepages in regular_alloc_released_ are
-  // considered.
-  Length n_used_released_[AccessDensityPrediction::kPredictionCounts];
+  // considered. Partitioned by hotness class and access density.
+  Length n_used_released_[static_cast<size_t>(HotnessClass::kCount)]
+                         [AccessDensityPrediction::kPredictionCounts];
 
-  HugeLength n_was_released_[AccessDensityPrediction::kPredictionCounts];
+  HugeLength n_was_released_[static_cast<size_t>(HotnessClass::kCount)]
+                            [AccessDensityPrediction::kPredictionCounts];
   // n_used_partial_released_ is the number of pages which have been allocated
   // from the hugepages in the set regular_alloc_partial_released.
-  Length n_used_partial_released_[AccessDensityPrediction::kPredictionCounts];
+  Length n_used_partial_released_[static_cast<size_t>(HotnessClass::kCount)]
+                                 [AccessDensityPrediction::kPredictionCounts];
 
   // RemoveFromFillerList pt from the appropriate PageTrackerList.
   void RemoveFromFillerList(TrackerType* absl_nonnull pt);
@@ -1664,36 +1704,56 @@ HugePageFiller<TrackerType>::TryGet(Length n, SpanAllocInfo span_alloc_info) {
   ASSUME(n < kPagesPerHugePage);
   TrackerType* pt;
 
+  // Predict hotness class from stack trace and allocation size
+  HotnessClass predicted_class = HotnessPredictor(span_alloc_info.stack_trace, n.in_bytes());
+  const size_t hotness_idx = static_cast<size_t>(predicted_class);
+
   bool was_released = false;
   const AccessDensityPrediction type = span_alloc_info.density;
   do {
     const size_t listindex =
         ListFor(n, 0, type, kPagesPerHugePage.raw_num() - 1);
-    pt = regular_alloc_[type].GetLeast(listindex);
+    pt = regular_alloc_[hotness_idx][type].GetLeast(listindex);
     if (pt) {
       TC_ASSERT(!pt->donated());
+      TC_ASSERT_EQ(pt->hotness_class(), predicted_class);
       break;
     }
+    
+    // FIXME: not confident about the logic here
     if (ABSL_PREDICT_TRUE(type == AccessDensityPrediction::kSparse)) {
+      // Donated allocs start as kCold (uninitialized). We allow them to be used
+      // with any hotness class, but once set, only allocations with the same
+      // hotness class can use that page
       pt = donated_alloc_.GetLeast(n.raw_num());
       if (pt) {
-        break;
+        // Allow if uninitialized (kCold) or if it matches the predicted class
+        if (pt->hotness_class() != HotnessClass::kCold && 
+            pt->hotness_class() != predicted_class) {
+          pt = nullptr;
+        } else {
+          // Set the hotness class (either initializing from kCold or confirming match)
+          pt->set_hotness_class(predicted_class);
+          break;
+        }
       }
     }
-    pt = regular_alloc_partial_released_[type].GetLeast(listindex);
+    pt = regular_alloc_partial_released_[hotness_idx][type].GetLeast(listindex);
     if (pt) {
       TC_ASSERT(!pt->donated());
+      TC_ASSERT_EQ(pt->hotness_class(), predicted_class);
       was_released = true;
-      TC_ASSERT_GE(n_used_partial_released_[type], pt->used_pages());
-      n_used_partial_released_[type] -= pt->used_pages();
+      TC_ASSERT_GE(n_used_partial_released_[hotness_idx][type], pt->used_pages());
+      n_used_partial_released_[hotness_idx][type] -= pt->used_pages();
       break;
     }
-    pt = regular_alloc_released_[type].GetLeast(listindex);
+    pt = regular_alloc_released_[hotness_idx][type].GetLeast(listindex);
     if (pt) {
       TC_ASSERT(!pt->donated());
+      TC_ASSERT_EQ(pt->hotness_class(), predicted_class);
       was_released = true;
-      TC_ASSERT_GE(n_used_released_[type], pt->used_pages());
-      n_used_released_[type] -= pt->used_pages();
+      TC_ASSERT_GE(n_used_released_[hotness_idx][type], pt->used_pages());
+      n_used_released_[hotness_idx][type] -= pt->used_pages();
       break;
     }
 
@@ -1719,7 +1779,7 @@ HugePageFiller<TrackerType>::TryGet(Length n, SpanAllocInfo span_alloc_info) {
   // record that the state has been toggled back and update the stat counter.
   if (was_released && !pt->released() && !pt->was_released()) {
     pt->set_was_released(/*status=*/true);
-    ++n_was_released_[type];
+    ++n_was_released_[hotness_idx][type];
   }
   TC_ASSERT(was_released || page_allocation.previously_unbacked == Length(0));
   TC_ASSERT_GE(unmapped_, page_allocation.previously_unbacked);
@@ -1824,10 +1884,11 @@ inline TrackerType* HugePageFiller<TrackerType>::Put(
 
     if (pt->was_released()) {
       pt->set_was_released(/*status=*/false);
+      const size_t hotness_idx = static_cast<size_t>(pt->hotness_class());
       if (pt->HasDenseSpans()) {
-        --n_was_released_[AccessDensityPrediction::kDense];
+        --n_was_released_[hotness_idx][AccessDensityPrediction::kDense];
       } else {
-        --n_was_released_[AccessDensityPrediction::kSparse];
+        --n_was_released_[hotness_idx][AccessDensityPrediction::kSparse];
       }
     }
 
@@ -1985,6 +2046,11 @@ inline void HugePageFiller<TrackerType>::Contribute(
   TC_ASSERT_EQ(pt->released_pages(), Length(0));
 
   const AccessDensityPrediction type = span_alloc_info.density;
+
+  // Predict and set hotness class for this hugepage based on the first allocation
+  HotnessClass predicted_class = HotnessPredictor(span_alloc_info.stack_trace,
+                                       pt->used_pages().in_bytes());
+  pt->set_hotness_class(predicted_class);
 
   // Decide whether to sample this tracker for tagging.
   rng_ = ExponentialBiased::NextRandom(rng_);
@@ -2260,14 +2326,17 @@ inline Length HugePageFiller<TrackerType>::ReleasePages(
     //
     // We do not examine the regular_alloc_released_ lists, as only contain
     // completely released pages.
-    int n_candidates = SelectCandidates(
-        absl::MakeSpan(candidates), 0,
-        regular_alloc_partial_released_[AccessDensityPrediction::kSparse],
-        kChunks);
-    n_candidates = SelectCandidates(
-        absl::MakeSpan(candidates), n_candidates,
-        regular_alloc_partial_released_[AccessDensityPrediction::kDense],
-        kChunks);
+    int n_candidates = 0;
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      n_candidates = SelectCandidates(
+          absl::MakeSpan(candidates), n_candidates,
+          regular_alloc_partial_released_[h][AccessDensityPrediction::kSparse],
+          kChunks);
+      n_candidates = SelectCandidates(
+          absl::MakeSpan(candidates), n_candidates,
+          regular_alloc_partial_released_[h][AccessDensityPrediction::kDense],
+          kChunks);
+    }
 
     Length released =
         ReleaseCandidates(absl::MakeSpan(candidates.data(), n_candidates),
@@ -2289,12 +2358,15 @@ inline Length HugePageFiller<TrackerType>::ReleasePages(
     // We select candidate hugepages from few_objects_alloc_ first as we expect
     // hugepages in this alloc to become free earlier than those in other
     // allocs.
-    int n_candidates = SelectCandidates(
-        absl::MakeSpan(candidates), /*current_candidates=*/0,
-        regular_alloc_[AccessDensityPrediction::kSparse], kChunks);
-    n_candidates = SelectCandidates(
-        absl::MakeSpan(candidates), n_candidates,
-        regular_alloc_[AccessDensityPrediction::kDense], kChunks);
+    int n_candidates = 0;
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      n_candidates = SelectCandidates(
+          absl::MakeSpan(candidates), n_candidates,
+          regular_alloc_[h][AccessDensityPrediction::kSparse], kChunks);
+      n_candidates = SelectCandidates(
+          absl::MakeSpan(candidates), n_candidates,
+          regular_alloc_[h][AccessDensityPrediction::kDense], kChunks);
+    }
     // TODO(b/138864853): Perhaps remove donated_alloc_ from here, it's not a
     // great candidate for partial release.
     n_candidates = SelectCandidates(absl::MakeSpan(candidates), n_candidates,
@@ -2319,11 +2391,13 @@ inline void HugePageFiller<TrackerType>::AddSpanStats(
   // We can skip the first kChunks lists as they are known to be
   // 100% full.
   donated_alloc_.Iter(loop, 0);
-  for (const AccessDensityPrediction type :
-       {AccessDensityPrediction::kDense, AccessDensityPrediction::kSparse}) {
-    regular_alloc_[type].Iter(loop, kChunks);
-    regular_alloc_partial_released_[type].Iter(loop, 0);
-    regular_alloc_released_[type].Iter(loop, 0);
+  for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+    for (const AccessDensityPrediction type :
+         {AccessDensityPrediction::kDense, AccessDensityPrediction::kSparse}) {
+      regular_alloc_[h][type].Iter(loop, kChunks);
+      regular_alloc_partial_released_[h][type].Iter(loop, 0);
+      regular_alloc_released_[h][type].Iter(loop, 0);
+    }
   }
 }
 
@@ -2340,18 +2414,21 @@ template <class TrackerType>
 inline HugePageFillerStats HugePageFiller<TrackerType>::GetStats() const {
   HugePageFillerStats stats;
   // Note kChunks, not kNumLists here--we're iterating *full* lists.
-  for (size_t chunk = 0; chunk < kChunks; ++chunk) {
-    size_t sparselist =
-        ListFor(/*longest=*/Length(0), chunk, AccessDensityPrediction::kSparse,
-                /*nallocs=*/0);
-    stats.n_full[AccessDensityPrediction::kSparse] += NHugePages(
-        regular_alloc_[AccessDensityPrediction::kSparse][sparselist].length());
+  // Aggregate across all hotness classes
+  for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+    for (size_t chunk = 0; chunk < kChunks; ++chunk) {
+      size_t sparselist =
+          ListFor(/*longest=*/Length(0), chunk, AccessDensityPrediction::kSparse,
+                  /*nallocs=*/0);
+      stats.n_full[AccessDensityPrediction::kSparse] += NHugePages(
+          regular_alloc_[h][AccessDensityPrediction::kSparse][sparselist].length());
 
-    size_t denselist = ListFor(
-        /*longest=*/Length(0), chunk, AccessDensityPrediction::kDense,
-        kPagesPerHugePage.raw_num());
-    stats.n_full[AccessDensityPrediction::kDense] += NHugePages(
-        regular_alloc_[AccessDensityPrediction::kDense][denselist].length());
+      size_t denselist = ListFor(
+          /*longest=*/Length(0), chunk, AccessDensityPrediction::kDense,
+          kPagesPerHugePage.raw_num());
+      stats.n_full[AccessDensityPrediction::kDense] += NHugePages(
+          regular_alloc_[h][AccessDensityPrediction::kDense][denselist].length());
+    }
   }
   stats.n_full[AccessDensityPrediction::kPredictionCounts] =
       stats.n_full[AccessDensityPrediction::kSparse] +
@@ -2361,13 +2438,21 @@ inline HugePageFillerStats HugePageFiller<TrackerType>::GetStats() const {
   stats.n_total[AccessDensityPrediction::kSparse] = donated_alloc_.size();
   for (const AccessDensityPrediction count :
        {AccessDensityPrediction::kSparse, AccessDensityPrediction::kDense}) {
-    stats.n_fully_released[count] = regular_alloc_released_[count].size();
-    stats.n_partial_released[count] =
-        regular_alloc_partial_released_[count].size();
+    stats.n_fully_released[count] = 0;
+    stats.n_partial_released[count] = 0;
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      stats.n_fully_released[count] += regular_alloc_released_[h][count].size();
+      stats.n_partial_released[count] +=
+          regular_alloc_partial_released_[h][count].size();
+    }
     stats.n_released[count] =
         stats.n_fully_released[count] + stats.n_partial_released[count];
+    Length total_regular = Length(0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      total_regular += regular_alloc_[h][count].size().in_pages();
+    }
     stats.n_total[count] +=
-        stats.n_released[count] + regular_alloc_[count].size();
+        stats.n_released[count] + NHugePages(total_regular);
     stats.n_partial[count] =
         stats.n_total[count] - stats.n_released[count] - stats.n_full[count];
   }
@@ -2687,17 +2772,19 @@ inline void HugePageFiller<TrackerType>::TreatHugepageTrackers(
   // dense lists. if enable_release_free_swapped is true, we also collect
   // trackers from regular_alloc_partial_released_ and donated_alloc_.
   if (enable_release_free_swapped) {
-    regular_alloc_partial_released_[AccessDensityPrediction::kSparse].Iter(
-        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-          unbacked_tracker_treatment.SelectEligibleTrackers(pt);
-        },
-        /*start=*/kChunks);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_partial_released_[h][AccessDensityPrediction::kSparse].Iter(
+          [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+            unbacked_tracker_treatment.SelectEligibleTrackers(pt);
+          },
+          /*start=*/kChunks);
 
-    regular_alloc_partial_released_[AccessDensityPrediction::kDense].Iter(
-        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-          unbacked_tracker_treatment.SelectEligibleTrackers(pt);
-        },
-        /*start=*/kChunks);
+      regular_alloc_partial_released_[h][AccessDensityPrediction::kDense].Iter(
+          [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+            unbacked_tracker_treatment.SelectEligibleTrackers(pt);
+          },
+          /*start=*/kChunks);
+    }
 
     donated_alloc_.Iter(
         [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
@@ -2706,46 +2793,48 @@ inline void HugePageFiller<TrackerType>::TreatHugepageTrackers(
         /*start=*/0);
   }
 
-  regular_alloc_[AccessDensityPrediction::kDense].Iter(
-      [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-        sampled_tracker_treatment.SelectEligibleTrackers(pt);
-        if (collect_non_hugepage_trackers) {
-          unbacked_tracker_treatment.SelectEligibleTrackers(pt);
-        }
-      },
-      /*start=*/0);
+  for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+    regular_alloc_[h][AccessDensityPrediction::kDense].Iter(
+        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+          sampled_tracker_treatment.SelectEligibleTrackers(pt);
+          if (collect_non_hugepage_trackers) {
+            unbacked_tracker_treatment.SelectEligibleTrackers(pt);
+          }
+        },
+        /*start=*/0);
 
-  regular_alloc_[AccessDensityPrediction::kSparse].Iter(
-      [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-        sampled_tracker_treatment.SelectEligibleTrackers(pt);
-        if (collect_non_hugepage_trackers) {
-          unbacked_tracker_treatment.SelectEligibleTrackers(pt);
-        }
-      },
-      /*start=*/0);
+    regular_alloc_[h][AccessDensityPrediction::kSparse].Iter(
+        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+          sampled_tracker_treatment.SelectEligibleTrackers(pt);
+          if (collect_non_hugepage_trackers) {
+            unbacked_tracker_treatment.SelectEligibleTrackers(pt);
+          }
+        },
+        /*start=*/0);
 
-  regular_alloc_partial_released_[AccessDensityPrediction::kSparse].Iter(
-      [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-        sampled_tracker_treatment.SelectEligibleTrackers(pt);
-      },
-      /*start=*/0);
+    regular_alloc_partial_released_[h][AccessDensityPrediction::kSparse].Iter(
+        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+          sampled_tracker_treatment.SelectEligibleTrackers(pt);
+        },
+        /*start=*/0);
 
-  regular_alloc_partial_released_[AccessDensityPrediction::kDense].Iter(
-      [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-        sampled_tracker_treatment.SelectEligibleTrackers(pt);
-      },
-      /*start=*/0);
-  regular_alloc_released_[AccessDensityPrediction::kSparse].Iter(
-      [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-        sampled_tracker_treatment.SelectEligibleTrackers(pt);
-      },
-      /*start=*/0);
+    regular_alloc_partial_released_[h][AccessDensityPrediction::kDense].Iter(
+        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+          sampled_tracker_treatment.SelectEligibleTrackers(pt);
+        },
+        /*start=*/0);
+    regular_alloc_released_[h][AccessDensityPrediction::kSparse].Iter(
+        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+          sampled_tracker_treatment.SelectEligibleTrackers(pt);
+        },
+        /*start=*/0);
 
-  regular_alloc_released_[AccessDensityPrediction::kDense].Iter(
-      [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
-        sampled_tracker_treatment.SelectEligibleTrackers(pt);
-      },
-      /*start=*/0);
+    regular_alloc_released_[h][AccessDensityPrediction::kDense].Iter(
+        [&](TrackerType& pt) GOOGLE_MALLOC_SECTION {
+          sampled_tracker_treatment.SelectEligibleTrackers(pt);
+        },
+        /*start=*/0);
+  }
 
   pageheap_lock.unlock();
   sampled_tracker_treatment.Treat();
@@ -2911,11 +3000,13 @@ inline void HugePageFiller<TrackerType>::Print(Printer& out, bool everything,
   {
     size_t num_selected = 0;
     UsageInfo::UsageInfoRecords records;
-    regular_alloc_[AccessDensityPrediction::kSparse].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_[h][AccessDensityPrediction::kSparse].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kSparseRegular, out);
     num_selected = 0;
   }
@@ -2923,11 +3014,13 @@ inline void HugePageFiller<TrackerType>::Print(Printer& out, bool everything,
   {
     size_t num_selected = 0;
     UsageInfo::UsageInfoRecords records;
-    regular_alloc_[AccessDensityPrediction::kDense].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_[h][AccessDensityPrediction::kDense].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kDenseRegular, out);
   }
 
@@ -2945,44 +3038,52 @@ inline void HugePageFiller<TrackerType>::Print(Printer& out, bool everything,
   {
     size_t num_selected = 0;
     UsageInfo::UsageInfoRecords records;
-    regular_alloc_partial_released_[AccessDensityPrediction::kSparse].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_partial_released_[h][AccessDensityPrediction::kSparse].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kSparsePartialReleased, out);
   }
 
   {
     size_t num_selected = 0;
     UsageInfo::UsageInfoRecords records;
-    regular_alloc_partial_released_[AccessDensityPrediction::kDense].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_partial_released_[h][AccessDensityPrediction::kDense].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kDensePartialReleased, out);
   }
 
   {
     size_t num_selected = 0;
     UsageInfo::UsageInfoRecords records;
-    regular_alloc_released_[AccessDensityPrediction::kSparse].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_released_[h][AccessDensityPrediction::kSparse].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kSparseReleased, out);
   }
 
   {
     size_t num_selected = 0;
     UsageInfo::UsageInfoRecords records;
-    regular_alloc_released_[AccessDensityPrediction::kDense].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_released_[h][AccessDensityPrediction::kDense].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kDenseReleased, out);
   }
 
@@ -3091,22 +3192,26 @@ inline void HugePageFiller<TrackerType>::PrintInPbtxt(
   {
     UsageInfo::UsageInfoRecords records;
     size_t num_selected = 0;
-    regular_alloc_[AccessDensityPrediction::kSparse].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_[h][AccessDensityPrediction::kSparse].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kSparseRegular, hpaa);
   }
 
   {
     UsageInfo::UsageInfoRecords records;
     size_t num_selected = 0;
-    regular_alloc_[AccessDensityPrediction::kDense].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_[h][AccessDensityPrediction::kDense].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kDenseRegular, hpaa);
   }
 
@@ -3124,44 +3229,52 @@ inline void HugePageFiller<TrackerType>::PrintInPbtxt(
   {
     UsageInfo::UsageInfoRecords records;
     size_t num_selected = 0;
-    regular_alloc_partial_released_[AccessDensityPrediction::kSparse].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_partial_released_[h][AccessDensityPrediction::kSparse].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kSparsePartialReleased, hpaa);
   }
 
   {
     UsageInfo::UsageInfoRecords records;
     size_t num_selected = 0;
-    regular_alloc_partial_released_[AccessDensityPrediction::kDense].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_partial_released_[h][AccessDensityPrediction::kDense].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kDensePartialReleased, hpaa);
   }
 
   {
     UsageInfo::UsageInfoRecords records;
     size_t num_selected = 0;
-    regular_alloc_released_[AccessDensityPrediction::kSparse].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_released_[h][AccessDensityPrediction::kSparse].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kSparseReleased, hpaa);
   }
 
   {
     UsageInfo::UsageInfoRecords records;
     size_t num_selected = 0;
-    regular_alloc_released_[AccessDensityPrediction::kDense].Iter(
-        [&](const TrackerType& pt) {
-          usage.Record(pt, pageflags, now, frequency, records, num_selected);
-        },
-        0);
+    for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+      regular_alloc_released_[h][AccessDensityPrediction::kDense].Iter(
+          [&](const TrackerType& pt) {
+            usage.Record(pt, pageflags, now, frequency, records, num_selected);
+          },
+          0);
+    }
     usage.Print(records, UsageInfo::kDenseReleased, hpaa);
   }
 
@@ -3313,18 +3426,19 @@ inline void HugePageFiller<TrackerType>::RemoveFromFillerList(TrackerType* pt) {
   const AccessDensityPrediction type = pt->HasDenseSpans()
                                            ? AccessDensityPrediction::kDense
                                            : AccessDensityPrediction::kSparse;
+  const size_t hotness_idx = static_cast<size_t>(pt->hotness_class());
   size_t i = ListFor(longest, IndexFor(*pt), type, pt->nallocs());
 
   if (!pt->released()) {
-    regular_alloc_[type].Remove(pt, i);
+    regular_alloc_[hotness_idx][type].Remove(pt, i);
   } else if (pt->free_pages() <= pt->released_pages()) {
-    regular_alloc_released_[type].Remove(pt, i);
-    TC_ASSERT_GE(n_used_released_[type], pt->used_pages());
-    n_used_released_[type] -= pt->used_pages();
+    regular_alloc_released_[hotness_idx][type].Remove(pt, i);
+    TC_ASSERT_GE(n_used_released_[hotness_idx][type], pt->used_pages());
+    n_used_released_[hotness_idx][type] -= pt->used_pages();
   } else {
-    regular_alloc_partial_released_[type].Remove(pt, i);
-    TC_ASSERT_GE(n_used_partial_released_[type], pt->used_pages());
-    n_used_partial_released_[type] -= pt->used_pages();
+    regular_alloc_partial_released_[hotness_idx][type].Remove(pt, i);
+    TC_ASSERT_GE(n_used_partial_released_[hotness_idx][type], pt->used_pages());
+    n_used_partial_released_[hotness_idx][type] -= pt->used_pages();
   }
 }
 
@@ -3361,16 +3475,17 @@ inline void HugePageFiller<TrackerType>::AddToFillerList(TrackerType* pt) {
   const AccessDensityPrediction type = pt->HasDenseSpans()
                                            ? AccessDensityPrediction::kDense
                                            : AccessDensityPrediction::kSparse;
+  const size_t hotness_idx = static_cast<size_t>(pt->hotness_class());
   size_t i = ListFor(longest, IndexFor(*pt), type, pt->nallocs());
 
   if (!pt->released()) {
-    regular_alloc_[type].Add(pt, i);
+    regular_alloc_[hotness_idx][type].Add(pt, i);
   } else if (pt->free_pages() <= pt->released_pages()) {
-    regular_alloc_released_[type].Add(pt, i);
-    n_used_released_[type] += pt->used_pages();
+    regular_alloc_released_[hotness_idx][type].Add(pt, i);
+    n_used_released_[hotness_idx][type] += pt->used_pages();
   } else {
-    regular_alloc_partial_released_[type].Add(pt, i);
-    n_used_partial_released_[type] += pt->used_pages();
+    regular_alloc_partial_released_[hotness_idx][type].Add(pt, i);
+    n_used_partial_released_[hotness_idx][type] += pt->used_pages();
   }
 }
 
@@ -3410,14 +3525,14 @@ template <class TrackerType>
 template <typename F>
 void HugePageFiller<TrackerType>::ForEachHugePage(const F& func) {
   donated_alloc_.Iter(func, 0);
-  regular_alloc_[AccessDensityPrediction::kSparse].Iter(func, 0);
-  regular_alloc_[AccessDensityPrediction::kDense].Iter(func, 0);
-  regular_alloc_partial_released_[AccessDensityPrediction::kSparse].Iter(func,
-                                                                         0);
-  regular_alloc_partial_released_[AccessDensityPrediction::kDense].Iter(func,
-                                                                        0);
-  regular_alloc_released_[AccessDensityPrediction::kSparse].Iter(func, 0);
-  regular_alloc_released_[AccessDensityPrediction::kDense].Iter(func, 0);
+  for (size_t h = 0; h < static_cast<size_t>(HotnessClass::kCount); ++h) {
+    regular_alloc_[h][AccessDensityPrediction::kSparse].Iter(func, 0);
+    regular_alloc_[h][AccessDensityPrediction::kDense].Iter(func, 0);
+    regular_alloc_partial_released_[h][AccessDensityPrediction::kSparse].Iter(func, 0);
+    regular_alloc_partial_released_[h][AccessDensityPrediction::kDense].Iter(func, 0);
+    regular_alloc_released_[h][AccessDensityPrediction::kSparse].Iter(func, 0);
+    regular_alloc_released_[h][AccessDensityPrediction::kDense].Iter(func, 0);
+  }
 }
 
 // Helper for stat functions.
