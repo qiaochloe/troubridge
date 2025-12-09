@@ -647,15 +647,13 @@ inline sized_ptr_t do_malloc_pages(size_t size, size_t weight, Policy policy) {
   }
 
   // Capture stack trace for hotness prediction
-  StackTrace trace = {};
-  trace.depth = absl::GetStackTrace(trace.stack, kMaxStackDepth, 2);
-  trace.requested_size = size;
-  trace.allocated_size = size;
-
   SpanAllocInfo span_alloc_info;
   span_alloc_info.objects_per_span = 1;
   span_alloc_info.density = AccessDensityPrediction::kSparse;
-  span_alloc_info.stack_trace = &trace;
+  span_alloc_info.stack_trace.depth = absl::GetStackTrace(
+      span_alloc_info.stack_trace.stack, kMaxStackDepth, 2);
+  span_alloc_info.stack_trace.requested_size = size;
+  span_alloc_info.stack_trace.allocated_size = size;
 
   Span* span = tc_globals.page_allocator().NewAligned(
       num_pages, BytesToLengthCeil(policy.align()), span_alloc_info, tag);

@@ -73,7 +73,7 @@ enum class HotnessClass : uint8_t {
 };
 
 // Predicts the hotness class for an allocation based on stack trace and size.
-inline HotnessClass HotnessPredictor(const StackTrace* stack_trace,
+inline HotnessClass HotnessPredictor(const StackTrace& stack_trace,
                                       size_t allocation_size) {
   (void)stack_trace;
   (void)allocation_size;
@@ -1705,7 +1705,11 @@ HugePageFiller<TrackerType>::TryGet(Length n, SpanAllocInfo span_alloc_info) {
   TrackerType* pt;
 
   // Predict hotness class from stack trace and allocation size
-  HotnessClass predicted_class = HotnessPredictor(span_alloc_info.stack_trace, n.in_bytes());
+  // If no stack trace is available (depth == 0), default to kCold
+  HotnessClass predicted_class = HotnessClass::kCold;
+  if (span_alloc_info.stack_trace.depth > 0) {
+    predicted_class = HotnessPredictor(span_alloc_info.stack_trace, n.in_bytes());
+  }
   const size_t hotness_idx = static_cast<size_t>(predicted_class);
 
   bool was_released = false;
@@ -2049,7 +2053,7 @@ inline void HugePageFiller<TrackerType>::Contribute(
 
   // Predict and set hotness class for this hugepage based on the first allocation
   HotnessClass predicted_class = HotnessClass::kCold;
-  if (!donated) {
+  if (!donated && span_alloc_info.stack_trace.depth > 0) {
     predicted_class = HotnessPredictor(span_alloc_info.stack_trace,
                                       pt->used_pages().in_bytes());
   }

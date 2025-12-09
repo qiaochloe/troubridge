@@ -62,7 +62,10 @@ enum AccessDensityPrediction {
 struct SpanAllocInfo {
   size_t objects_per_span;
   AccessDensityPrediction density;
-  const StackTrace* stack_trace = nullptr;
+  // Optional stack trace for hotness prediction. Only populated for large
+  // allocations. For small allocations, this will be default-initialized
+  // (depth = 0).
+  StackTrace stack_trace = {};
 };
 
 // Information kept for a span (a contiguous run of pages).
