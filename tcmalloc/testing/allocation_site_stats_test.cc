@@ -62,6 +62,7 @@ void AllocateFromFunction4(size_t size) {
 }
 
 TEST(AllocationSiteStatsTest, BasicUsage) {
+  AllocateFromFunction4(4097);
   AllocateFromFunction1();
   AllocateFromFunction1();
   AllocateFromFunction2();

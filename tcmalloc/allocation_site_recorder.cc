@@ -233,6 +233,7 @@ void AllocationSiteRecorder::RecordAllocation(size_t size, void* allocated_addre
       it->second.total_bytes += size;
       it->second.min_size = std::min(it->second.min_size, size);
       it->second.max_size = std::max(it->second.max_size, size);
+      it->second.latest_allocation = allocated_address;
     } else {
       // Insert new site - this might allocate, but we've already set
       // recording_allocation to prevent reentrancy
@@ -249,16 +250,18 @@ void AllocationSiteRecorder::RecordFree(void* freed_address) {
   if (IsShuttingDown()) {
     return;
   }
+  if (freed_address == nullptr) {
+    return;
+  }
   if (recording_free) {
     return;
   }
   recording_free = true;
   recording_allocation = true;
   absl::MutexLock lock(&freed_allocations_mutex_);
+  // Initialize the set with some buckets on first use if needed
   if (freed_allocations_.bucket_count() == 0) {
-    recording_free = false;
-    recording_allocation = false;
-    return;
+    freed_allocations_.reserve(1024);
   }
   freed_allocations_.insert(freed_address);
   recording_allocation = false;
