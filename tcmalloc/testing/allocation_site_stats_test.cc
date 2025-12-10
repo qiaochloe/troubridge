@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <iostream>
 
 #include <string>
 #include <vector>
@@ -43,12 +44,30 @@ void AllocateFromFunction3(size_t size) {
   free(ptr);
 }
 
+void AllocateFromFunction4(size_t size) {
+  int* ptrs[10];
+  for (int i = 0; i < 10; i++) {
+    ptrs[i] = (int*)malloc(size);
+  }
+  for (int i = 0; i < 10; i++) {
+    for (int j = 0; j < 5; j++) {
+      *(ptrs[j]) = i * 10 + j;
+      printf("%d\n", *(ptrs[j]));
+      usleep(100000);
+    }
+  }
+  for (int i = 0; i < 10; i++) {
+    free(ptrs[i]);
+  }
+}
+
 TEST(AllocationSiteStatsTest, BasicUsage) {
   AllocateFromFunction1();
   AllocateFromFunction1();
   AllocateFromFunction2();
   AllocateFromFunction3(1000);
   AllocateFromFunction3(2000);
+  AllocateFromFunction4(4097);
 
   // Get allocation site statistics
   std::string stats = MallocExtension::GetAllocationSiteStats();

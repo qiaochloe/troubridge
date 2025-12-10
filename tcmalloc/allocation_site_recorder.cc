@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <vector>
 #include <thread>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "absl/debugging/symbolize.h"
 #include "absl/debugging/stacktrace.h"
@@ -14,6 +17,7 @@
 GOOGLE_MALLOC_SECTION_BEGIN
 namespace tcmalloc {
 namespace tcmalloc_internal {
+
 // Thread-local flag to prevent reentrant calls. If we're already recording
 // an allocation, skip nested calls to avoid deadlock when the hash map
 // needs to allocate memory for resizing.
@@ -32,6 +36,137 @@ static void ShutdownRecorderAtExit() {
   }
 }
 
+// Pagemap entry bits (from /proc/self/pagemap)
+constexpr uint64_t PM_PRESENT = 1ULL << 63;       // Page is present in RAM
+constexpr uint64_t PM_PFN_MASK = (1ULL << 55) - 1; // Mask for page frame number (bits 0-54)
+
+constexpr size_t PAGE_SIZE = 4096;  // Typical page size, could use sysconf(_SC_PAGESIZE)
+
+// File descriptors for /proc and /sys interfaces - opened once and reused
+// -1 indicates not yet opened, -2 indicates open failed
+static int pagemap_fd = -1;
+static int page_idle_fd = -1;
+
+// Initialize file descriptors for /proc and /sys interfaces
+static void InitProcFds() {
+  if (pagemap_fd == -1) {
+    pagemap_fd = open("/proc/self/pagemap", O_RDONLY);
+    if (pagemap_fd < 0) pagemap_fd = -2;
+  }
+  if (page_idle_fd == -1) {
+    // Idle Page Tracking: /sys/kernel/mm/page_idle/bitmap
+    // Each bit represents one page frame. Writing 1 marks page as idle,
+    // reading returns 1 if page is still idle (not accessed), 0 if accessed.
+    page_idle_fd = open("/sys/kernel/mm/page_idle/bitmap", O_RDWR);
+    if (page_idle_fd < 0) page_idle_fd = -2;
+  }
+}
+
+// Get page frame number (PFN) for a virtual address from /proc/self/pagemap
+// Returns 0 if the page is not present or on error
+static uint64_t GetPageFrameNumber(void* addr) {
+  if (pagemap_fd < 0) return 0;
+  
+  uintptr_t vaddr = reinterpret_cast<uintptr_t>(addr);
+  uint64_t page_index = vaddr / PAGE_SIZE;
+  off_t offset = page_index * sizeof(uint64_t);
+  
+  uint64_t pagemap_entry = 0;
+  if (pread(pagemap_fd, &pagemap_entry, sizeof(pagemap_entry), offset) != sizeof(pagemap_entry)) {
+    return 0;
+  }
+  
+  // Check if page is present in RAM
+  if (!(pagemap_entry & PM_PRESENT)) {
+    return 0;
+  }
+  
+  // Extract page frame number (bits 0-54)
+  return pagemap_entry & PM_PFN_MASK;
+}
+
+// Check if a page was accessed since it was marked idle using Idle Page Tracking.
+// The page_idle bitmap has one bit per page frame:
+// - Writing 1 to a bit marks the page as idle
+// - Reading returns 1 if still idle (not accessed), 0 if the page was accessed
+// Returns true if the page was accessed (idle bit is 0), false otherwise.
+static bool IsPageAccessed(uint64_t pfn) {
+  if (page_idle_fd < 0 || pfn == 0) return false;
+  
+  // The bitmap is organized as 64-bit words, each bit representing one PFN
+  // Offset in bitmap file = (pfn / 64) * 8 bytes
+  // Bit position within word = pfn % 64
+  uint64_t word_index = pfn / 64;
+  uint64_t bit_index = pfn % 64;
+  off_t offset = word_index * sizeof(uint64_t);
+  
+  uint64_t idle_bits = 0;
+  if (pread(page_idle_fd, &idle_bits, sizeof(idle_bits), offset) != sizeof(idle_bits)) {
+    return false;
+  }
+  
+  // If the idle bit is 0, the page was accessed; if 1, still idle
+  bool is_idle = (idle_bits >> bit_index) & 1;
+  return !is_idle;  // Return true if accessed (not idle)
+}
+
+// Mark a page as idle using Idle Page Tracking
+static void MarkPageIdle(uint64_t pfn) {
+  if (page_idle_fd < 0 || pfn == 0) return;
+  
+  uint64_t word_index = pfn / 64;
+  uint64_t bit_index = pfn % 64;
+  off_t offset = word_index * sizeof(uint64_t);
+  
+  // Set the bit for this PFN to mark it as idle
+  uint64_t idle_bits = 1ULL << bit_index;
+  pwrite(page_idle_fd, &idle_bits, sizeof(idle_bits), offset);
+}
+
+// Check if a memory position has been accessed since it was last marked as idle.
+// Returns true if the page was accessed, false otherwise.
+bool recently_accessed(void* allocation) {
+  if (allocation == nullptr) {
+    return false;
+  }
+  
+  // Initialize file descriptors on first call
+  InitProcFds();
+  
+  // Get page frame number from pagemap
+  uint64_t pfn = GetPageFrameNumber(allocation);
+  if (pfn == 0) {
+    // Page not present or error reading pagemap
+    return false;
+  }
+  
+  // Check if the page was accessed (idle bit cleared)
+  return IsPageAccessed(pfn);
+}
+
+// Check if a page was accessed and then mark it idle for the next interval.
+// Returns true if the page was accessed since the last mark, false otherwise.
+static bool CheckAccessAndMarkIdle(void* allocation) {
+  if (allocation == nullptr) {
+    return false;
+  }
+  
+  InitProcFds();
+  
+  uint64_t pfn = GetPageFrameNumber(allocation);
+  if (pfn == 0) {
+    return false;
+  }
+  
+  // Check if accessed
+  bool was_accessed = IsPageAccessed(pfn);
+  
+  // Mark as idle for next interval
+  MarkPageIdle(pfn);
+  
+  return was_accessed;
+}
+const int access_checking_millisecond_interval = 200;
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
     {
@@ -44,14 +179,17 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
             freed_allocations_.erase(site.latest_allocation);
             site.latest_allocation = nullptr;
           } else {
-            site.sampled_accesses++;
+            // Check if page was accessed since last interval and mark idle for next
+            if (CheckAccessAndMarkIdle(site.latest_allocation)) {
+              site.sampled_accesses++;
+            }
             site.sampled_intervals++;
           }
         }
       }
       recording_free = false;
     }
-    absl::SleepFor(absl::Milliseconds(200));
+    absl::SleepFor(absl::Milliseconds(access_checking_millisecond_interval));
   }
 }
 
