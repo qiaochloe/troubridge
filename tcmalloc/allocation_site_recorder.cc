@@ -26,8 +26,6 @@ namespace tcmalloc_internal {
 // needs to allocate memory for resizing.
 ABSL_CONST_INIT static thread_local bool recording_allocation = false;
 
-ABSL_CONST_INIT static thread_local bool recording_free = false;
-
 // Static pointer to the recorder for the atexit handler to call Shutdown().
 // This is set when the tracking thread is created.
 static AllocationSiteRecorder* g_recorder_for_shutdown = nullptr;
@@ -201,19 +199,17 @@ static bool CheckAllocationAccess(void* allocation) {
   
   return was_accessed;
 }
-const int access_checking_millisecond_interval = 200;
-const int millisecond_interval_between_clear_and_check = 1000;
+const int access_checking_millisecond_interval = 100;
+const int millisecond_interval_between_clear_and_check = 500;
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
     {
       recording_allocation = true;
-      recording_free = true;
       absl::MutexLock lockm(&mutex_);
-      absl::MutexLock lock(&freed_allocations_mutex_);
       for (auto& [trace, site] : sites_) {
         if (site.latest_allocation != nullptr) {
-          if (freed_allocations_.find(site.latest_allocation) != freed_allocations_.end()) {
-            freed_allocations_.erase(site.latest_allocation);
+          if (freed_allocations_.has((unsigned long)site.latest_allocation)) {
+            freed_allocations_.erase((unsigned long)site.latest_allocation);
             site.latest_allocation = nullptr;
           } else {
             // Mark pages idle
@@ -223,17 +219,14 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
       }
     }
     recording_allocation = false;
-    recording_free = false;
     absl::SleepFor(absl::Milliseconds(millisecond_interval_between_clear_and_check));
     {
-      recording_free = true;
       recording_allocation = true;
       absl::MutexLock lockm(&mutex_);
-      absl::MutexLock lock(&freed_allocations_mutex_);
       for (auto& [trace, site] : sites_) {
         if (site.latest_allocation != nullptr) {
-          if (freed_allocations_.find(site.latest_allocation) != freed_allocations_.end()) {
-            freed_allocations_.erase(site.latest_allocation);
+          if (freed_allocations_.has((unsigned long)site.latest_allocation)) {
+            freed_allocations_.erase((unsigned long)site.latest_allocation);
             site.latest_allocation = nullptr;
           } else {
             // Check if page was accessed since cleared
@@ -245,7 +238,6 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
         }
       }
     }
-    recording_free = false;
     recording_allocation = false;
     absl::SleepFor(absl::Milliseconds(access_checking_millisecond_interval));
   }
@@ -303,34 +295,14 @@ void AllocationSiteRecorder::RecordAllocation(size_t size, void* allocated_addre
 }
 
 void AllocationSiteRecorder::RecordFree(void* freed_address) {
-  // Check shutdown flag first - during program cleanup, data structures may be
-  // destroyed or in an invalid state, so skip all operations.
-  if (IsShuttingDown()) {
-    return;
-  }
   if (freed_address == nullptr) {
     return;
   }
-  if (recording_free) {
-    return;
-  }
-  recording_free = true;
-  recording_allocation = true;
-  {
-    absl::MutexLock lock(&freed_allocations_mutex_);
-    // Initialize the set with some buckets on first use if needed
-    if (freed_allocations_.bucket_count() == 0) {
-      freed_allocations_.reserve(1024);
-    }
-    freed_allocations_.insert(freed_address);
-  }
-  recording_allocation = false;
-  recording_free = false;
+  freed_allocations_.insert((unsigned long)freed_address);
 }
 
 std::vector<AllocationSite> AllocationSiteRecorder::GetAllocationSites() const {
   recording_allocation = true;
-  recording_free = true;
   size_t size;
   {
     absl::MutexLock lock(&mutex_);
@@ -356,7 +328,6 @@ std::vector<AllocationSite> AllocationSiteRecorder::GetAllocationSites() const {
     }
   }
   recording_allocation = false;
-  recording_free = false;
   return result;
 }
 

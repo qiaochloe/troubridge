@@ -39,6 +39,34 @@ struct AllocationSite {
       : stack_trace(trace), total_count(1), total_bytes(size), min_size(size), max_size(size), latest_allocation(allocated_address), sampled_intervals(0), sampled_accesses(0) {}
 };
 
+const size_t budget_set_size = 1 << 22;
+class LockFreeBudgetSet {
+ public:
+  LockFreeBudgetSet() {
+    memset(internal_, 0, budget_set_size);
+  }
+  ~LockFreeBudgetSet() = default;
+  unsigned long mix_to_index(unsigned long x) {
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return x % budget_set_size;
+  }
+  bool has(unsigned long key) {
+    return internal_[mix_to_index(key)];
+  }
+  void insert(unsigned long key) {
+    internal_[mix_to_index(key)] = true;
+  }
+  void erase(unsigned long key) {
+    internal_[mix_to_index(key)] = false;
+  }
+ private:
+  bool internal_[budget_set_size];
+};
+
 // Records all allocation sites with their stack traces.
 // Thread-safe recorder that maintains statistics for each unique allocation site.
 class AllocationSiteRecorder {
@@ -109,10 +137,9 @@ class AllocationSiteRecorder {
   };
 
   mutable absl::Mutex mutex_;
-  mutable absl::Mutex freed_allocations_mutex_;
   absl::flat_hash_map<StackTrace, AllocationSite, StackTraceHash, StackTraceEqual> sites_
       ABSL_GUARDED_BY(mutex_);
-  std::unordered_set<void*> freed_allocations_ ABSL_GUARDED_BY(freed_allocations_mutex_);
+  LockFreeBudgetSet freed_allocations_;
   std::atomic<bool> enabled_{true};
   std::atomic<bool> made_tracking_thread_{false};
   // Flag to indicate shutdown - prevents RecordFree from inserting during cleanup
