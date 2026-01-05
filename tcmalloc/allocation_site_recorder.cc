@@ -144,9 +144,28 @@ bool recently_accessed(void* allocation) {
   return IsPageAccessed(pfn);
 }
 
-// Check if a page was accessed and then mark it idle for the next interval.
+// Mark the page associated with an allocation idle
+static void MarkAllocationIdle(void* allocation) {
+  if (allocation == nullptr) {
+    return false;
+  }
+  
+  InitProcFds();
+  
+  uint64_t pfn = GetPageFrameNumber(allocation);
+  if (pfn == 0) {
+    return false;
+  }
+  
+  // Mark as idle for next interval
+  MarkPageIdle(pfn);
+  
+  return;
+}
+
+// Check if a page was accessed since it's marked idle
 // Returns true if the page was accessed since the last mark, false otherwise.
-static bool CheckAccessAndMarkIdle(void* allocation) {
+static bool CheckAllocationAccess(void* allocation) {
   if (allocation == nullptr) {
     return false;
   }
@@ -161,12 +180,10 @@ static bool CheckAccessAndMarkIdle(void* allocation) {
   // Check if accessed
   bool was_accessed = IsPageAccessed(pfn);
   
-  // Mark as idle for next interval
-  MarkPageIdle(pfn);
-  
   return was_accessed;
 }
 const int access_checking_millisecond_interval = 200;
+const int millisecond_interval_between_clear_and_check = 1000;
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
     {
@@ -179,8 +196,26 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
             freed_allocations_.erase(site.latest_allocation);
             site.latest_allocation = nullptr;
           } else {
-            // Check if page was accessed since last interval and mark idle for next
-            if (CheckAccessAndMarkIdle(site.latest_allocation)) {
+            // Mark pages idle
+            MarkAllocationIdle(site.latest_allocation)
+          }
+        }
+      }
+      recording_free = false;
+    }
+    absl::SleepFor(absl::Milliseconds(millisecond_interval_between_clear_and_check));
+    {
+      recording_free = true;
+      absl::MutexLock lockm(&mutex_);
+      absl::MutexLock lock(&freed_allocations_mutex_);
+      for (auto& [trace, site] : sites_) {
+        if (site.latest_allocation != nullptr) {
+          if (freed_allocations_.find(site.latest_allocation) != freed_allocations_.end()) {
+            freed_allocations_.erase(site.latest_allocation);
+            site.latest_allocation = nullptr;
+          } else {
+            // Check if page was accessed since cleared
+            if (CheckAllocationAccess(site.latest_allocation)) {
               site.sampled_accesses++;
             }
             site.sampled_intervals++;
@@ -189,7 +224,7 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
       }
       recording_free = false;
     }
-    absl::SleepFor(absl::Milliseconds(access_checking_millisecond_interval));
+    absl::SleepFor(absl::Milliseconds(access_checking_millisecond_interval))
   }
 }
 
