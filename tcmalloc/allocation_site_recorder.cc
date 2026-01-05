@@ -199,8 +199,8 @@ static bool CheckAllocationAccess(void* allocation) {
   
   return was_accessed;
 }
-const int access_checking_millisecond_interval = 100;
-const int millisecond_interval_between_clear_and_check = 500;
+const int access_checking_millisecond_interval = 500;
+const int millisecond_interval_between_clear_and_check = 300;
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
     {
