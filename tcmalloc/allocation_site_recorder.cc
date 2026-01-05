@@ -147,14 +147,14 @@ bool recently_accessed(void* allocation) {
 // Mark the page associated with an allocation idle
 static void MarkAllocationIdle(void* allocation) {
   if (allocation == nullptr) {
-    return false;
+    return;
   }
   
   InitProcFds();
   
   uint64_t pfn = GetPageFrameNumber(allocation);
   if (pfn == 0) {
-    return false;
+    return;
   }
   
   // Mark as idle for next interval
@@ -187,6 +187,7 @@ const int millisecond_interval_between_clear_and_check = 1000;
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
     {
+      recording_allocation = true;
       recording_free = true;
       absl::MutexLock lockm(&mutex_);
       absl::MutexLock lock(&freed_allocations_mutex_);
@@ -197,15 +198,17 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
             site.latest_allocation = nullptr;
           } else {
             // Mark pages idle
-            MarkAllocationIdle(site.latest_allocation)
+            MarkAllocationIdle(site.latest_allocation);
           }
         }
       }
-      recording_free = false;
     }
+    recording_allocation = false;
+    recording_free = false;
     absl::SleepFor(absl::Milliseconds(millisecond_interval_between_clear_and_check));
     {
       recording_free = true;
+      recording_allocation = true;
       absl::MutexLock lockm(&mutex_);
       absl::MutexLock lock(&freed_allocations_mutex_);
       for (auto& [trace, site] : sites_) {
@@ -222,9 +225,10 @@ void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
           }
         }
       }
-      recording_free = false;
     }
-    absl::SleepFor(absl::Milliseconds(access_checking_millisecond_interval))
+    recording_free = false;
+    recording_allocation = false;
+    absl::SleepFor(absl::Milliseconds(access_checking_millisecond_interval));
   }
 }
 
@@ -293,17 +297,21 @@ void AllocationSiteRecorder::RecordFree(void* freed_address) {
   }
   recording_free = true;
   recording_allocation = true;
-  absl::MutexLock lock(&freed_allocations_mutex_);
-  // Initialize the set with some buckets on first use if needed
-  if (freed_allocations_.bucket_count() == 0) {
-    freed_allocations_.reserve(1024);
+  {
+    absl::MutexLock lock(&freed_allocations_mutex_);
+    // Initialize the set with some buckets on first use if needed
+    if (freed_allocations_.bucket_count() == 0) {
+      freed_allocations_.reserve(1024);
+    }
+    freed_allocations_.insert(freed_address);
   }
-  freed_allocations_.insert(freed_address);
   recording_allocation = false;
   recording_free = false;
 }
 
 std::vector<AllocationSite> AllocationSiteRecorder::GetAllocationSites() const {
+  recording_allocation = true;
+  recording_free = true;
   size_t size;
   {
     absl::MutexLock lock(&mutex_);
@@ -328,6 +336,8 @@ std::vector<AllocationSite> AllocationSiteRecorder::GetAllocationSites() const {
       result.resize(idx);
     }
   }
+  recording_allocation = false;
+  recording_free = false;
   return result;
 }
 
