@@ -9,6 +9,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <iostream>
+#include <fstream>
+
 #include "absl/debugging/symbolize.h"
 #include "absl/debugging/stacktrace.h"
 #include "absl/synchronization/mutex.h"
@@ -29,8 +32,24 @@ ABSL_CONST_INIT static thread_local bool recording_free = false;
 // This is set when the tracking thread is created.
 static AllocationSiteRecorder* g_recorder_for_shutdown = nullptr;
 
+// Helper function to make allocations from different call sites
+void WriteMachineLearningStats(const std::string& machine_learning_stats) {
+  // In Bazel tests, write outputs into TEST_UNDECLARED_OUTPUTS_DIR so they are
+  // collected under bazel-testlogs; fall back to CWD when run manually.
+  const char* output_dir = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  std::string output_path = output_dir
+                                ? std::string(output_dir) +
+                                      "/machine_learning_stats.txt"
+                                : "machine_learning_stats.txt";
+  std::ofstream machine_learning_file(output_path,
+                                      std::ios::out | std::ios::app);
+  machine_learning_file << machine_learning_stats << std::endl;
+}
+
 // atexit handler to shut down the recorder before cleanup runs.
 static void ShutdownRecorderAtExit() {
+  std::string machine_learning_stats = MallocExtension::GetMachineLearningAllocationSiteStats();
+  WriteMachineLearningStats(machine_learning_stats);
   if (g_recorder_for_shutdown != nullptr) {
     g_recorder_for_shutdown->Shutdown();
   }
