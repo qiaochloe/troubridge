@@ -40,7 +40,7 @@ void WriteMachineLearningStats(const std::string& machine_learning_stats) {
                                       "/machine_learning_stats.txt"
                                 : "machine_learning_stats.txt";
   std::ofstream machine_learning_file(output_path,
-                                      std::ios::out | std::ios::app);
+                                      std::ios::out);
   machine_learning_file << machine_learning_stats << std::endl;
 }
 
@@ -200,7 +200,7 @@ static bool CheckAllocationAccess(void* allocation) {
   return was_accessed;
 }
 const int access_checking_millisecond_interval = 500;
-const int millisecond_interval_between_clear_and_check = 300;
+const int millisecond_interval_between_clear_and_check = 200;
 void AllocationSiteRecorder::PeriodicMemoryAccessTracking() {
   while (IsEnabled()) {
     {
