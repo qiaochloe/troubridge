@@ -1,0 +1,247 @@
+#include "tcmalloc/hotness_predictor.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <ios>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "absl/base/call_once.h"
+#include "absl/debugging/symbolize.h"
+#include "absl/strings/str_replace.h"
+#include "tcmalloc/internal/logging.h"
+
+#include <torch/script.h>
+#include <torch/torch.h>
+#include "tokenizers_cpp.h"
+
+GOOGLE_MALLOC_SECTION_BEGIN
+namespace tcmalloc {
+namespace tcmalloc_internal {
+
+namespace {
+
+// Helper function to read file contents
+std::vector<uint8_t> ReadFileBytes(const std::string& path) {
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    return {};
+  }
+  
+  std::streamsize size = file.tellg();
+  file.seekg(0, std::ios::beg);
+  
+  std::vector<uint8_t> buffer(size);
+  if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+    return {};
+  }
+  
+  return buffer;
+}
+
+}  // namespace
+
+struct HotnessPredictorML::Impl {
+  std::unique_ptr<tokenizers::Tokenizer> tokenizer;
+  torch::jit::script::Module model;
+  bool model_loaded;
+  bool tokenizer_loaded;
+  Impl() : model_loaded(false), tokenizer_loaded(false) {}
+};
+
+HotnessPredictorML::HotnessPredictorML() : initialized_(false) {
+  impl_ = std::make_unique<Impl>();
+}
+
+HotnessPredictorML::~HotnessPredictorML() = default;
+
+bool HotnessPredictorML::Initialize() {
+  if (initialized_) {
+    return true;
+  }
+
+  const char* model_path = "predictor/best_model.ts";
+  const char* tokenizer_path = "predictor/tokenizer.json";
+
+  // Load tokenizer using tokenizers-cpp
+  try {
+    auto blob = ReadFileBytes(tokenizer_path);
+    if (blob.empty()) {
+      TC_LOG("Failed to read tokenizer file: %s", tokenizer_path);
+      return false;
+    }
+    
+    impl_->tokenizer = tokenizers::Tokenizer::FromBlobJSON(blob);
+    if (!impl_->tokenizer) {
+      TC_LOG("Failed to load tokenizer from %s", tokenizer_path);
+      return false;
+    }
+    impl_->tokenizer_loaded = true;
+  } catch (const std::exception& e) {
+    TC_LOG("Exception loading tokenizer: %s", e.what());
+    return false;
+  }
+
+  // Load model
+  try {
+    impl_->model = torch::jit::load(model_path);
+    impl_->model.eval();
+    impl_->model_loaded = true;
+  } catch (const std::exception& e) {
+    TC_LOG("Failed to load model from %s: %s", model_path, e.what());
+    return false;
+  }
+
+  initialized_ = true;
+  TC_LOG("ML Hotness Predictor initialized successfully");
+  return true;
+}
+
+HotnessClass HotnessPredictorML::Predict(const StackTrace* stack_trace, size_t allocation_size) {
+  if (!initialized_ || !impl_->model_loaded || !impl_->tokenizer_loaded) {
+    return HotnessClass::kCold;
+  }
+
+  try {
+    // Convert stack trace to string
+    std::string stack_str = StackTraceToString(stack_trace);
+    if (stack_str.empty()) {
+      return HotnessClass::kCold;
+    }
+    
+    // Tokenize using tokenizers-cpp
+    std::vector<int> token_ids_int = impl_->tokenizer->Encode(stack_str);
+    // Convert to int64_t for PyTorch
+    std::vector<int64_t> token_ids(token_ids_int.begin(), token_ids_int.end());
+    
+    if (token_ids.empty()) {
+      return HotnessClass::kCold;
+    }
+
+    // Limit sequence length (model expects reasonable lengths)
+    constexpr size_t kMaxSeqLen = 256;
+    if (token_ids.size() > kMaxSeqLen) {
+      token_ids.resize(kMaxSeqLen);
+    }
+
+    // Prepare inputs
+    torch::NoGradGuard no_grad;
+    
+    // Create token tensor: [1, seq_len]
+    torch::Tensor tokens_tensor = torch::from_blob(
+        token_ids.data(), 
+        {1, static_cast<int64_t>(token_ids.size())}, 
+        torch::kInt64
+    ).clone();  // Clone to ensure ownership
+
+    // Create size tensor: log1p(size) as [1, 1]
+    double log_size = std::log1p(static_cast<double>(allocation_size));
+    torch::Tensor size_tensor = torch::tensor({{log_size}}, torch::kFloat32);
+
+    // Run inference
+    std::vector<torch::jit::IValue> inputs;
+    inputs.push_back(tokens_tensor);
+    inputs.push_back(size_tensor);
+    
+    auto output = impl_->model.forward(inputs).toTensor();
+    
+    // Get predicted class (argmax)
+    auto predicted = output.argmax(1).item<int64_t>();
+    
+    // Map to HotnessClass
+    if (predicted == 0) {
+      return HotnessClass::kCold;
+    } else if (predicted == 1) {
+      return HotnessClass::kWarm;
+    } else {
+      return HotnessClass::kHot;
+    }
+  } catch (const std::exception& e) {
+    TC_LOG("ML prediction failed: %s", e.what());
+    return HotnessClass::kCold;
+  }
+}
+
+std::string HotnessPredictorML::StackTraceToString(const StackTrace* stack_trace) {
+  if (stack_trace == nullptr || stack_trace->depth == 0) {
+    return "";
+  }
+
+  std::ostringstream oss;
+  for (size_t i = 0; i < stack_trace->depth && i < kMaxStackDepth; ++i) {
+    void* pc = stack_trace->stack[i];
+    char symbol_buf[1024];
+    
+    if (absl::Symbolize(pc, symbol_buf, sizeof(symbol_buf))) {
+      std::string symbol(symbol_buf);
+      // Remove file:line part if present
+      size_t space_pos = symbol.find(' ');
+      if (space_pos != std::string::npos) {
+        symbol = symbol.substr(space_pos + 1);
+      }
+      // Remove template brackets and function parentheses for consistency
+      absl::StrReplaceAll({{"<>", ""}, {"()", ""}}, &symbol);
+      oss << symbol;
+      if (i < stack_trace->depth - 1) {
+        oss << "\n";
+      }
+    } else {
+      // Fallback to address
+      oss << "0x" << std::hex << reinterpret_cast<uintptr_t>(pc);
+      if (i < stack_trace->depth - 1) {
+        oss << "\n";
+      }
+    }
+  }
+  
+  return oss.str();
+}
+
+// Stub implementation when ML predictor is disabled
+struct HotnessPredictorML::Impl {};
+
+HotnessPredictorML::HotnessPredictorML() : initialized_(false) {
+  impl_ = std::make_unique<Impl>();
+}
+
+HotnessPredictorML::~HotnessPredictorML() = default;
+
+bool HotnessPredictorML::Initialize() {
+  return false;
+}
+
+HotnessClass HotnessPredictorML::Predict(const StackTrace* stack_trace, size_t allocation_size) {
+  (void)stack_trace;
+  (void)allocation_size;
+  return HotnessClass::kCold;
+}
+
+std::string HotnessPredictorML::StackTraceToString(const StackTrace* stack_trace) {
+  (void)stack_trace;
+  return "";
+}
+
+namespace {
+
+// Global instance with thread-safe initialization
+ABSL_CONST_INIT absl::once_flag init_flag;
+std::unique_ptr<HotnessPredictorML> g_predictor;
+
+void InitPredictor() {
+  g_predictor = std::make_unique<HotnessPredictorML>();
+  g_predictor->Initialize();
+}
+
+}  // namespace
+
+HotnessPredictorML* GetHotnessPredictorML() {
+  absl::call_once(init_flag, InitPredictor);
+  return g_predictor.get();
+}
+
+}  // namespace tcmalloc_internal
+}  // namespace tcmalloc
+GOOGLE_MALLOC_SECTION_END

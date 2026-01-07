@@ -56,6 +56,7 @@
 #include "tcmalloc/internal/range_tracker.h"
 #include "tcmalloc/internal/residency.h"
 #include "tcmalloc/internal/system_allocator.h"
+#include "tcmalloc/hotness_predictor.h"
 #include "tcmalloc/pages.h"
 #include "tcmalloc/span.h"
 #include "tcmalloc/stats.h"
@@ -64,19 +65,14 @@ GOOGLE_MALLOC_SECTION_BEGIN
 namespace tcmalloc {
 namespace tcmalloc_internal {
 
-// Hotness classes for access-frequency-aware allocation.
-enum class HotnessClass : uint8_t {
-  kCold = 0,
-  kWarm = 1,
-  kHot = 2,
-  kCount = 3
-};
-
 // Predicts the hotness class for an allocation based on stack trace and size.
 inline HotnessClass HotnessPredictor(const StackTrace* stack_trace,
                                       size_t allocation_size) {
-  (void)stack_trace;
-  (void)allocation_size;
+  // Use ML-based predictor if available, otherwise fall back to kCold
+  HotnessPredictorML* predictor = GetHotnessPredictorML();
+  if (predictor != nullptr && predictor->IsInitialized()) {
+    return predictor->Predict(stack_trace, allocation_size);
+  }
   return HotnessClass::kCold;
 }
 

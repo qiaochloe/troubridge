@@ -1,0 +1,57 @@
+package(default_visibility = ["//visibility:public"])
+
+# Main libtorch dynamic library (Linux)
+cc_import(
+    name = "torch",
+    shared_library = "lib/libtorch.so",
+    hdrs = glob(["include/**/*.h", "include/**/*.hpp"]),
+    includes = ["include"],
+    deps = [
+        ":torch_cpu",
+        ":c10",
+        ":torch_global_deps",
+    ],
+)
+
+# CPU-only libtorch
+cc_import(
+    name = "torch_cpu",
+    shared_library = "lib/libtorch_cpu.so",
+    hdrs = glob(["include/**/*.h", "include/**/*.hpp"]),
+    includes = ["include"],
+    deps = [
+        ":c10",
+        ":torch_global_deps",
+    ],
+)
+
+# Core C10 library
+cc_import(
+    name = "c10",
+    shared_library = "lib/libc10.so",
+    hdrs = glob(["include/c10/**/*.h", "include/c10/**/*.hpp"]),
+    includes = ["include"],
+)
+
+# Global dependencies
+cc_import(
+    name = "torch_global_deps",
+    shared_library = "lib/libtorch_global_deps.so",
+)
+
+# Convenience target that includes everything needed
+cc_library(
+    name = "torch_all",
+    hdrs = glob(["include/**/*.h", "include/**/*.hpp"]),
+    includes = ["include"],
+    deps = [
+        ":torch",
+        ":torch_cpu",
+        ":c10",
+        ":torch_global_deps",
+    ],
+    linkopts = [
+        "-lpthread",
+        "-ldl",
+    ],
+)
