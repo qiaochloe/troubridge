@@ -2,4 +2,3 @@
 bazel-*
 MODULE.bazel.lock
 *.venv
-/third_party

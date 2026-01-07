@@ -4,7 +4,7 @@ package(default_visibility = ["//visibility:public"])
 cc_import(
     name = "torch",
     shared_library = "lib/libtorch.so",
-    hdrs = glob(["include/**/*.h", "include/**/*.hpp"]),
+    hdrs = glob(["include/**/*.h"], allow_empty = True),
     includes = ["include"],
     deps = [
         ":torch_cpu",
@@ -17,7 +17,7 @@ cc_import(
 cc_import(
     name = "torch_cpu",
     shared_library = "lib/libtorch_cpu.so",
-    hdrs = glob(["include/**/*.h", "include/**/*.hpp"]),
+    hdrs = glob(["include/**/*.h"], allow_empty = True),
     includes = ["include"],
     deps = [
         ":c10",
@@ -29,7 +29,7 @@ cc_import(
 cc_import(
     name = "c10",
     shared_library = "lib/libc10.so",
-    hdrs = glob(["include/c10/**/*.h", "include/c10/**/*.hpp"]),
+    hdrs = glob(["include/c10/**/*.h"], allow_empty = True),
     includes = ["include"],
 )
 
@@ -42,7 +42,7 @@ cc_import(
 # Convenience target that includes everything needed
 cc_library(
     name = "torch_all",
-    hdrs = glob(["include/**/*.h", "include/**/*.hpp"]),
+    hdrs = glob(["include/**/*.h"], allow_empty = True),
     includes = ["include"],
     deps = [
         ":torch",

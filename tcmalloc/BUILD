@@ -291,7 +291,10 @@ create_tcmalloc_libraries(
         "transfer_cache_internals.h",
         "transfer_cache_stats.h",
     ],
-    copts = TCMALLOC_DEFAULT_COPTS,
+    copts = TCMALLOC_DEFAULT_COPTS + [
+        "-DTCMALLOC_USE_ML_PREDICTOR",
+        "-DTCMALLOC_USE_TOKENIZERS_CPP",
+    ],
     linkstatic = 1,
     visibility = [":tcmalloc_tests"],
     deps = [

@@ -1,0 +1,27 @@
+package(default_visibility = ["//visibility:public"])
+
+# Tokenizers-cpp bindings (prebuilt static libraries)
+cc_import(
+    name = "tokenizers_c_import",
+    static_library = "build/libtokenizers_c.a",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "tokenizers_cpp_import",
+    static_library = "build/libtokenizers_cpp.a",
+    deps = [":tokenizers_c_import"],
+    visibility = ["//visibility:public"],
+)
+
+# Main tokenizers-cpp library target
+cc_library(
+    name = "tokenizers_cpp",
+    hdrs = [
+        "include/tokenizers_c.h",
+        "include/tokenizers_cpp.h",
+    ],
+    includes = ["include"],
+    deps = [":tokenizers_cpp_import"],
+    visibility = ["//visibility:public"],
+)
