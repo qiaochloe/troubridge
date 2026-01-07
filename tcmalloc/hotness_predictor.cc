@@ -80,63 +80,75 @@ HotnessPredictorML::HotnessPredictorML() : initialized_(false) {
 HotnessPredictorML::~HotnessPredictorML() = default;
 
 bool HotnessPredictorML::Initialize() {
+  TC_LOG("[ML] Initialize() called");
   if (initialized_) {
+    TC_LOG("[ML] Already initialized, returning true");
     return true;
   }
 
   const char* model_path = "predictor/best_model.ts";
   const char* tokenizer_path = "predictor/tokenizer.json";
 
+  TC_LOG("[ML] Checking file existence: %s", tokenizer_path);
   // Check if files exist before attempting to load
   if (!FileExists(tokenizer_path)) {
-    TC_LOG("Tokenizer file not found: %s - ML predictor disabled", tokenizer_path);
+    TC_LOG("[ML] Tokenizer file not found: %s - ML predictor disabled", tokenizer_path);
     return false;
   }
 
+  TC_LOG("[ML] Checking file existence: %s", model_path);
   if (!FileExists(model_path)) {
-    TC_LOG("Model file not found: %s - ML predictor disabled", model_path);
+    TC_LOG("[ML] Model file not found: %s - ML predictor disabled", model_path);
     return false;
   }
 
 #ifdef TCMALLOC_USE_TOKENIZERS_CPP
   // Load tokenizer using tokenizers-cpp
+  TC_LOG("[ML] Reading tokenizer file");
   try {
     auto blob = ReadFileBytes(tokenizer_path);
     if (blob.empty()) {
-      TC_LOG("Failed to read tokenizer file: %s", tokenizer_path);
+      TC_LOG("[ML] Failed to read tokenizer file: %s", tokenizer_path);
       return false;
     }
+    
+    TC_LOG("[ML] Tokenizer file read, size: %zu bytes", blob.size());
     
     // Convert vector<uint8_t> to string
     std::string json_blob(reinterpret_cast<const char*>(blob.data()), blob.size());
     
+    TC_LOG("[ML] Creating tokenizer from JSON blob");
     impl_->tokenizer = tokenizers::Tokenizer::FromBlobJSON(json_blob);
     if (!impl_->tokenizer) {
-      TC_LOG("Failed to load tokenizer from %s", tokenizer_path);
+      TC_LOG("[ML] Failed to load tokenizer from %s", tokenizer_path);
       return false;
     }
     impl_->tokenizer_loaded = true;
+    TC_LOG("[ML] Tokenizer loaded successfully");
   } catch (const std::exception& e) {
-    TC_LOG("Exception loading tokenizer: %s", e.what());
+    TC_LOG("[ML] Exception loading tokenizer: %s", e.what());
     return false;
   }
 #else
-  TC_LOG("tokenizers-cpp not available - ML predictor disabled");
+  TC_LOG("[ML] tokenizers-cpp not available - ML predictor disabled");
   return false;
 #endif
 
   // Load model
+  TC_LOG("[ML] Loading model from: %s", model_path);
   try {
     impl_->model = torch::jit::load(model_path);
+    TC_LOG("[ML] Model loaded, setting to eval mode");
     impl_->model.eval();
     impl_->model_loaded = true;
+    TC_LOG("[ML] Model loaded successfully");
   } catch (const std::exception& e) {
-    TC_LOG("Failed to load model from %s: %s", model_path, e.what());
+    TC_LOG("[ML] Failed to load model from %s: %s", model_path, e.what());
     return false;
   }
 
   initialized_ = true;
-  TC_LOG("ML Hotness Predictor initialized successfully");
+  TC_LOG("[ML] ML Hotness Predictor initialized successfully");
   return true;
 }
 
@@ -286,29 +298,60 @@ std::unique_ptr<HotnessPredictorML> g_predictor;
 // memory allocations.
 ABSL_CONST_INIT static std::atomic<bool> initializing{false};
 
+// Thread-local flag to detect same-thread reentrancy into call_once.
+// If we're already initializing on this thread, we must not call call_once
+// again as it will deadlock.
+ABSL_CONST_INIT static thread_local bool in_init{false};
+
 void InitPredictor() {
+  TC_LOG("[ML] InitPredictor() called");
+  
   // Set flag immediately to prevent reentrant calls during initialization.
   // This must be done before any allocations to prevent deadlock.
   bool expected = false;
   if (!initializing.compare_exchange_strong(expected, true)) {
+    TC_LOG("[ML] InitPredictor() already in progress, skipping");
     return;
   }
 
+  TC_LOG("[ML] Creating HotnessPredictorML instance");
   g_predictor = std::make_unique<HotnessPredictorML>();
+  
+  TC_LOG("[ML] Calling Initialize()");
   g_predictor->Initialize();
+  
+  TC_LOG("[ML] Initialization complete");
   initializing.store(false);
 }
 
 }  // namespace
 
 HotnessPredictorML* GetHotnessPredictorML() {
-  // If initialization is in progress, return nullptr immediately to avoid
-  // reentrancy deadlock. The caller will fall back to kCold.
-  if (initializing.load()) {
+  // If we're already initializing on THIS thread, return nullptr
+  // immediately. Calling call_once reentrantly from the same thread will
+  // deadlock because call_once uses a mutex internally.
+  if (in_init) {
+    TC_LOG("[ML] GetHotnessPredictorML() called during init (same thread), returning nullptr");
     return nullptr;
   }
   
+  // If initialization is in progress on another thread, return nullptr
+  // to avoid waiting (which could deadlock if that thread is waiting for us).
+  if (initializing.load()) {
+    TC_LOG("[ML] GetHotnessPredictorML() called during init (other thread), returning nullptr");
+    return nullptr;
+  }
+  
+  // Mark that we're entering call_once on this thread
+  in_init = true;
+  TC_LOG("[ML] GetHotnessPredictorML() calling call_once");
+  
   absl::call_once(init_flag, InitPredictor);
+  
+  // Clear the thread-local flag
+  in_init = false;
+  
+  TC_LOG("[ML] GetHotnessPredictorML() returning predictor");
   return g_predictor.get();
 }
 
