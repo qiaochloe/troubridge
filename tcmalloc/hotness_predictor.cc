@@ -19,6 +19,7 @@
 #include "absl/strings/str_replace.h"
 #include "absl/synchronization/mutex.h"
 #include "tcmalloc/internal/logging.h"
+#include "tcmalloc/static_vars.h"
 
 #ifdef TCMALLOC_USE_ML_PREDICTOR
 #include <torch/script.h>
@@ -379,7 +380,14 @@ void InitPredictor() {
   g_predictor = new (raw_mem) HotnessPredictorML();
   
   TC_LOG("[ML] Calling Initialize()");
-  g_predictor->Initialize();
+  bool init_success = g_predictor->Initialize();
+  
+  if (init_success) {
+    // Disable AllocationSiteRecorder to avoid destruction order issues
+    // with libtorch's static destructors during program shutdown.
+    tcmalloc::tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
+    TC_LOG("[ML] AllocationSiteRecorder disabled to avoid libtorch shutdown issues");
+  }
   
   TC_LOG("[ML] Initialization complete");
   initializing.store(false);
