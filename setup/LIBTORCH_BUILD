@@ -45,6 +45,13 @@ cc_import(
     shared_library = "lib/libtorch_global_deps.so",
 )
 
+# OpenMP library (required by libtorch)
+cc_import(
+    name = "gomp",
+    shared_library = "lib/libgomp-98b21ff3.so.1",
+    visibility = ["//visibility:public"],
+)
+
 # Convenience target that includes everything needed
 cc_library(
     name = "torch_all",
@@ -58,6 +65,7 @@ cc_library(
         ":torch_cpu",
         ":c10",
         ":torch_global_deps",
+        ":gomp",
     ],
     linkopts = [
         "-lpthread",
