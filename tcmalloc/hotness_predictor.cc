@@ -84,10 +84,10 @@ struct HotnessPredictorML::Impl {
 };
 
 // Implementation of ImplMmapDeleter
-void HotnessPredictorML::ImplMmapDeleter::operator()(Impl* ptr) const {
+void HotnessPredictorML::ImplMmapDeleter::operator()(HotnessPredictorML::Impl* ptr) const {
   if (ptr) {
     ptr->~Impl();
-    size_t size = sizeof(Impl);
+    size_t size = sizeof(HotnessPredictorML::Impl);
     munmap(ptr, size);
   }
 }

@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <sys/mman.h>
 
 #include "absl/base/nullability.h"
 #include "tcmalloc/internal/logging.h"
@@ -56,7 +57,13 @@ class HotnessPredictorML {
 
   bool initialized_;
   class Impl;
-  std::unique_ptr<Impl> impl_;
+  
+  // Custom deleter for Impl that uses munmap to avoid going through tcmalloc
+  struct ImplMmapDeleter {
+    void operator()(Impl* ptr) const;
+  };
+  
+  std::unique_ptr<Impl, ImplMmapDeleter> impl_;
 };
 
 // Global instance (lazy-initialized)
