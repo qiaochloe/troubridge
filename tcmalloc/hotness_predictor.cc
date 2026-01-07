@@ -11,6 +11,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "absl/base/call_once.h"
 #include "absl/debugging/symbolize.h"
 #include "absl/strings/str_replace.h"
@@ -67,14 +70,21 @@ struct HotnessPredictorML::Impl {
 #ifdef TCMALLOC_USE_TOKENIZERS_CPP
   std::unique_ptr<tokenizers::Tokenizer> tokenizer;
 #endif
-  torch::jit::script::Module model;
+  // Use pointer to delay construction until model is loaded.
+  // torch::jit::script::Module default constructor may allocate or initialize
+  // global state, which could deadlock if called during allocator initialization.
+  std::unique_ptr<torch::jit::script::Module> model;
   bool model_loaded;
   bool tokenizer_loaded;
-  Impl() : model_loaded(false), tokenizer_loaded(false) {}
+  Impl() : model_loaded(false), tokenizer_loaded(false) {
+  }
 };
 
 HotnessPredictorML::HotnessPredictorML() : initialized_(false) {
+  TC_LOG("[ML] HotnessPredictorML constructor called");
+  TC_LOG("[ML] About to allocate Impl");
   impl_ = std::make_unique<Impl>();
+  TC_LOG("[ML] Impl allocated successfully");
 }
 
 HotnessPredictorML::~HotnessPredictorML() = default;
@@ -137,9 +147,10 @@ bool HotnessPredictorML::Initialize() {
   // Load model
   TC_LOG("[ML] Loading model from: %s", model_path);
   try {
-    impl_->model = torch::jit::load(model_path);
+    auto loaded_model = torch::jit::load(model_path);
     TC_LOG("[ML] Model loaded, setting to eval mode");
-    impl_->model.eval();
+    loaded_model.eval();
+    impl_->model = std::make_unique<torch::jit::script::Module>(std::move(loaded_model));
     impl_->model_loaded = true;
     TC_LOG("[ML] Model loaded successfully");
   } catch (const std::exception& e) {
@@ -154,7 +165,8 @@ bool HotnessPredictorML::Initialize() {
 
 HotnessClass HotnessPredictorML::Predict(const StackTrace* stack_trace,
                                          size_t allocation_size) {
-  if (!initialized_ || !impl_->model_loaded || !impl_->tokenizer_loaded) {
+  if (!initialized_ || !impl_->model_loaded || !impl_->tokenizer_loaded ||
+      !impl_->model) {
     return HotnessClass::kCold;
   }
 
@@ -203,7 +215,7 @@ HotnessClass HotnessPredictorML::Predict(const StackTrace* stack_trace,
     inputs.push_back(tokens_tensor);
     inputs.push_back(size_tensor);
 
-    auto output = impl_->model.forward(inputs).toTensor();
+    auto output = impl_->model->forward(inputs).toTensor();
 
     // Get predicted class (argmax)
     auto predicted = output.argmax(1).item<int64_t>();
@@ -288,9 +300,20 @@ std::string HotnessPredictorML::StackTraceToString(
 
 namespace {
 
+// Custom deleter for HotnessPredictorML that uses munmap instead of delete
+struct MmapDeleter {
+  void operator()(HotnessPredictorML* ptr) const {
+    if (ptr) {
+      ptr->~HotnessPredictorML();
+      size_t size = sizeof(HotnessPredictorML);
+      munmap(ptr, size);
+    }
+  }
+};
+
 // Global instance with thread-safe initialization
 ABSL_CONST_INIT absl::once_flag init_flag;
-std::unique_ptr<HotnessPredictorML> g_predictor;
+std::unique_ptr<HotnessPredictorML, MmapDeleter> g_predictor;
 
 // Atomic flag to track if initialization is in progress.
 // This prevents reentrant calls during initialization that could cause
@@ -314,8 +337,21 @@ void InitPredictor() {
     return;
   }
 
-  TC_LOG("[ML] Creating HotnessPredictorML instance");
-  g_predictor = std::make_unique<HotnessPredictorML>();
+  TC_LOG("[ML] Allocating HotnessPredictorML using mmap (bypassing tcmalloc)");
+  // Use mmap directly to avoid going through tcmalloc, which would cause
+  // reentrancy deadlock. We need enough space for HotnessPredictorML.
+  const size_t size = sizeof(HotnessPredictorML);
+  void* raw_mem = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (raw_mem == MAP_FAILED) {
+    TC_LOG("[ML] mmap failed for HotnessPredictorML allocation");
+    initializing.store(false);
+    return;
+  }
+  
+  TC_LOG("[ML] Using placement new to construct HotnessPredictorML");
+  HotnessPredictorML* ptr = new (raw_mem) HotnessPredictorML();
+  g_predictor = std::unique_ptr<HotnessPredictorML, MmapDeleter>(ptr);
   
   TC_LOG("[ML] Calling Initialize()");
   g_predictor->Initialize();
