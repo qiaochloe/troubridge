@@ -80,14 +80,38 @@ struct HotnessPredictorML::Impl {
   }
 };
 
+// Implementation of ImplMmapDeleter
+void HotnessPredictorML::ImplMmapDeleter::operator()(Impl* ptr) const {
+  if (ptr) {
+    ptr->~Impl();
+    size_t size = sizeof(Impl);
+    munmap(ptr, size);
+  }
+}
+
 HotnessPredictorML::HotnessPredictorML() : initialized_(false) {
   TC_LOG("[ML] HotnessPredictorML constructor called");
-  TC_LOG("[ML] About to allocate Impl");
-  impl_ = std::make_unique<Impl>();
+  TC_LOG("[ML] About to allocate Impl using mmap");
+  
+  // Use mmap to allocate Impl, bypassing tcmalloc to avoid reentrancy
+  const size_t size = sizeof(Impl);
+  void* raw_mem = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (raw_mem == MAP_FAILED) {
+    TC_LOG("[ML] mmap failed for Impl allocation");
+    impl_ = nullptr;  // Will be checked in Initialize()
+    return;
+  }
+  
+  TC_LOG("[ML] Using placement new to construct Impl");
+  Impl* ptr = new (raw_mem) Impl();
+  impl_ = std::unique_ptr<Impl, ImplMmapDeleter>(ptr);
   TC_LOG("[ML] Impl allocated successfully");
 }
 
-HotnessPredictorML::~HotnessPredictorML() = default;
+HotnessPredictorML::~HotnessPredictorML() {
+  // impl_ will be automatically destroyed by unique_ptr with ImplMmapDeleter
+}
 
 bool HotnessPredictorML::Initialize() {
   TC_LOG("[ML] Initialize() called");
