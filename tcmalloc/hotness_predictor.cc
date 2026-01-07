@@ -12,7 +12,6 @@
 #include <vector>
 
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include "absl/base/call_once.h"
@@ -38,9 +37,9 @@ namespace {
 // Helper function to check if file exists
 // Uses stat() system call directly to avoid any allocations
 bool FileExists(const std::string& path) {
-  struct stat buffer;
-  int result = stat(path.c_str(), &buffer);
-  return (result == 0);
+  // Use access() instead of stat() - simpler and faster
+  // F_OK tests for existence, R_OK would test for read permission
+  return (access(path.c_str(), F_OK) == 0);
 }
 
 // Helper function to read file contents
@@ -128,13 +127,17 @@ bool HotnessPredictorML::Initialize() {
 
   TC_LOG("[ML] Checking file existence: %s", tokenizer_path);
   // Check if files exist before attempting to load
-  if (!FileExists(tokenizer_path)) {
+  bool tokenizer_exists = FileExists(tokenizer_path);
+  TC_LOG("[ML] FileExists returned: %d", tokenizer_exists ? 1 : 0);
+  if (!tokenizer_exists) {
     TC_LOG("[ML] Tokenizer file not found: %s - ML predictor disabled", tokenizer_path);
     return false;
   }
 
   TC_LOG("[ML] Checking file existence: %s", model_path);
-  if (!FileExists(model_path)) {
+  bool model_exists = FileExists(model_path);
+  TC_LOG("[ML] FileExists returned: %d", model_exists ? 1 : 0);
+  if (!model_exists) {
     TC_LOG("[ML] Model file not found: %s - ML predictor disabled", model_path);
     return false;
   }
