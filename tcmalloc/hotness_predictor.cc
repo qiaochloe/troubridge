@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -353,8 +354,22 @@ ABSL_CONST_INIT static std::atomic<bool> initializing{false};
 // again as it will deadlock.
 ABSL_CONST_INIT static thread_local bool in_init{false};
 
+// Disable AllocationSiteRecorder early to avoid destruction order issues
+// with libtorch's static destructors during program shutdown.
+static void DisableAllocationSiteRecorderOnExit() {
+  tcmalloc::tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
+}
+
 void InitPredictor() {
   TC_LOG("[ML] InitPredictor() called");
+  
+  // Disable AllocationSiteRecorder immediately to prevent issues during shutdown.
+  // Libtorch's static destructors may allocate during program exit, which would
+  // trigger AllocationSiteRecorder, but the hash table may already be destroyed.
+  tcmalloc::tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
+  
+  // Also register an atexit handler as a backup
+  std::atexit(DisableAllocationSiteRecorderOnExit);
   
   // Set flag immediately to prevent reentrant calls during initialization.
   // This must be done before any allocations to prevent deadlock.
@@ -380,14 +395,7 @@ void InitPredictor() {
   g_predictor = new (raw_mem) HotnessPredictorML();
   
   TC_LOG("[ML] Calling Initialize()");
-  bool init_success = g_predictor->Initialize();
-  
-  if (init_success) {
-    // Disable AllocationSiteRecorder to avoid destruction order issues
-    // with libtorch's static destructors during program shutdown.
-    tcmalloc::tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
-    TC_LOG("[ML] AllocationSiteRecorder disabled to avoid libtorch shutdown issues");
-  }
+  g_predictor->Initialize();
   
   TC_LOG("[ML] Initialization complete");
   initializing.store(false);
@@ -396,6 +404,13 @@ void InitPredictor() {
 }  // namespace
 
 HotnessPredictorML* GetHotnessPredictorML() {
+  // Disable AllocationSiteRecorder as soon as ML predictor is accessed.
+  // This prevents destruction order issues with libtorch's static destructors.
+  static absl::once_flag disable_flag;
+  absl::call_once(disable_flag, []() {
+    tcmalloc::tcmalloc_internal::tc_globals.allocation_site_recorder().SetEnabled(false);
+  });
+  
   // If we're already initializing on THIS thread, return nullptr
   // immediately. Calling call_once reentrantly from the same thread will
   // deadlock because call_once uses a mutex internally.
