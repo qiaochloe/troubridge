@@ -737,6 +737,16 @@ create_tcmalloc_testsuite(
 )
 
 create_tcmalloc_testsuite(
+    name = "basic_test",
+    srcs = ["basic_test.cc"],
+    copts = TCMALLOC_DEFAULT_COPTS,
+    deps = [
+        "//tcmalloc:malloc_extension",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+create_tcmalloc_testsuite(
     name = "allocation_site_stats_test",
     srcs = ["allocation_site_stats_test.cc"],
     copts = TCMALLOC_DEFAULT_COPTS,

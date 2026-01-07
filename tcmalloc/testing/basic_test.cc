@@ -11,7 +11,7 @@
 namespace tcmalloc {
 namespace {
 
-TEST(AllocationSiteStatsTest, BasicUsage) {
+TEST(Basic, BasicUsage) {
   void* ptr = malloc(500);
   free(ptr);
   
