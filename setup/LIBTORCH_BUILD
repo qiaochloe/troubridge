@@ -5,7 +5,10 @@ cc_import(
     name = "torch",
     shared_library = "lib/libtorch.so",
     hdrs = glob(["include/**/*.h"], allow_empty = True),
-    includes = ["include"],
+    includes = [
+        "include",
+        "include/torch/csrc/api/include",  # For <torch/torch.h>
+    ],
     deps = [
         ":torch_cpu",
         ":c10",
@@ -18,7 +21,10 @@ cc_import(
     name = "torch_cpu",
     shared_library = "lib/libtorch_cpu.so",
     hdrs = glob(["include/**/*.h"], allow_empty = True),
-    includes = ["include"],
+    includes = [
+        "include",
+        "include/torch/csrc/api/include",  # For <torch/torch.h>
+    ],
     deps = [
         ":c10",
         ":torch_global_deps",
@@ -43,7 +49,10 @@ cc_import(
 cc_library(
     name = "torch_all",
     hdrs = glob(["include/**/*.h"], allow_empty = True),
-    includes = ["include"],
+    includes = [
+        "include",
+        "include/torch/csrc/api/include",  # For <torch/torch.h>
+    ],
     deps = [
         ":torch",
         ":torch_cpu",
