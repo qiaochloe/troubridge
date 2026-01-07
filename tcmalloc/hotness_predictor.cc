@@ -1,17 +1,20 @@
 #include "tcmalloc/hotness_predictor.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <ios>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "absl/base/call_once.h"
 #include "absl/debugging/symbolize.h"
 #include "absl/strings/str_replace.h"
+#include "absl/synchronization/mutex.h"
 #include "tcmalloc/internal/logging.h"
 
 #ifdef TCMALLOC_USE_ML_PREDICTOR
@@ -28,6 +31,12 @@ namespace tcmalloc_internal {
 
 namespace {
 
+// Helper function to check if file exists
+bool FileExists(const std::string& path) {
+  std::ifstream file(path);
+  return file.good();
+}
+
 // Helper function to read file contents
 std::vector<uint8_t> ReadFileBytes(const std::string& path) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -36,6 +45,10 @@ std::vector<uint8_t> ReadFileBytes(const std::string& path) {
   }
 
   std::streamsize size = file.tellg();
+  if (size <= 0) {
+    return {};
+  }
+  
   file.seekg(0, std::ios::beg);
 
   std::vector<uint8_t> buffer(size);
@@ -73,6 +86,17 @@ bool HotnessPredictorML::Initialize() {
 
   const char* model_path = "predictor/best_model.ts";
   const char* tokenizer_path = "predictor/tokenizer.json";
+
+  // Check if files exist before attempting to load
+  if (!FileExists(tokenizer_path)) {
+    TC_LOG("Tokenizer file not found: %s - ML predictor disabled", tokenizer_path);
+    return false;
+  }
+
+  if (!FileExists(model_path)) {
+    TC_LOG("Model file not found: %s - ML predictor disabled", model_path);
+    return false;
+  }
 
 #ifdef TCMALLOC_USE_TOKENIZERS_CPP
   // Load tokenizer using tokenizers-cpp
@@ -256,14 +280,34 @@ namespace {
 ABSL_CONST_INIT absl::once_flag init_flag;
 std::unique_ptr<HotnessPredictorML> g_predictor;
 
+// Atomic flag to track if initialization is in progress.
+// This prevents reentrant calls during initialization that could cause
+// deadlock when initialization operations (like model loading) trigger
+// memory allocations.
+ABSL_CONST_INIT static std::atomic<bool> initializing{false};
+
 void InitPredictor() {
+  // Set flag immediately to prevent reentrant calls during initialization.
+  // This must be done before any allocations to prevent deadlock.
+  bool expected = false;
+  if (!initializing.compare_exchange_strong(expected, true)) {
+    return;
+  }
+
   g_predictor = std::make_unique<HotnessPredictorML>();
   g_predictor->Initialize();
+  initializing.store(false);
 }
 
 }  // namespace
 
 HotnessPredictorML* GetHotnessPredictorML() {
+  // If initialization is in progress, return nullptr immediately to avoid
+  // reentrancy deadlock. The caller will fall back to kCold.
+  if (initializing.load()) {
+    return nullptr;
+  }
+  
   absl::call_once(init_flag, InitPredictor);
   return g_predictor.get();
 }

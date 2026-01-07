@@ -12,8 +12,12 @@ namespace tcmalloc {
 namespace {
 
 TEST(Basic, BasicUsage) {
+  std::cout << "Start basic test" << '\n';
+
   void* ptr = malloc(500);
   free(ptr);
+
+  std::cout << "End basic test" << '\n';
   
 //  // Get allocation site statistics
 //  std::string stats = MallocExtension::GetAllocationSiteStats();
