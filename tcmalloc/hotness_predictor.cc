@@ -85,6 +85,18 @@ struct HotnessPredictorML::Impl {
 // Implementation of ImplMmapDeleter
 void HotnessPredictorML::ImplMmapDeleter::operator()(HotnessPredictorML::Impl* ptr) const {
   if (ptr) {
+    // During program exit, global hash tables in tokenizers-cpp/libtorch
+    // may already be destroyed. Reset them explicitly, but if they're already
+    // destroyed, the unique_ptr destructor will handle it gracefully.
+    // We reset them before calling ~Impl() to ensure proper order.
+#ifdef TCMALLOC_USE_TOKENIZERS_CPP
+    if (ptr->tokenizer) {
+      ptr->tokenizer.reset();
+    }
+#endif
+    if (ptr->model) {
+      ptr->model.reset();
+    }
     ptr->~Impl();
     size_t size = sizeof(HotnessPredictorML::Impl);
     munmap(ptr, size);
@@ -113,6 +125,7 @@ HotnessPredictorML::HotnessPredictorML() : initialized_(false) {
 
 HotnessPredictorML::~HotnessPredictorML() {
   // impl_ will be automatically destroyed by unique_ptr with ImplMmapDeleter
+  // The deleter will reset tokenizer/model before destroying Impl
 }
 
 bool HotnessPredictorML::Initialize() {
@@ -325,20 +338,16 @@ std::string HotnessPredictorML::StackTraceToString(
 
 namespace {
 
-// Custom deleter for HotnessPredictorML that uses munmap instead of delete
-struct MmapDeleter {
-  void operator()(HotnessPredictorML* ptr) const {
-    if (ptr) {
-      ptr->~HotnessPredictorML();
-      size_t size = sizeof(HotnessPredictorML);
-      munmap(ptr, size);
-    }
-  }
-};
+// Note: g_predictor is intentionally leaked to avoid destruction order issues.
+// During program exit, global hash tables in tokenizers-cpp/libtorch may
+// already be destroyed, causing crashes. The OS will clean up the memory
+// when the process exits.
 
 // Global instance with thread-safe initialization
+// Use raw pointer to avoid destruction order issues during program exit.
+// The memory will be cleaned up by the OS when the process exits.
 ABSL_CONST_INIT absl::once_flag init_flag;
-std::unique_ptr<HotnessPredictorML, MmapDeleter> g_predictor;
+HotnessPredictorML* g_predictor = nullptr;
 
 // Atomic flag to track if initialization is in progress.
 // This prevents reentrant calls during initialization that could cause
@@ -375,8 +384,7 @@ void InitPredictor() {
   }
   
   TC_LOG("[ML] Using placement new to construct HotnessPredictorML");
-  HotnessPredictorML* ptr = new (raw_mem) HotnessPredictorML();
-  g_predictor = std::unique_ptr<HotnessPredictorML, MmapDeleter>(ptr);
+  g_predictor = new (raw_mem) HotnessPredictorML();
   
   TC_LOG("[ML] Calling Initialize()");
   g_predictor->Initialize();
@@ -413,7 +421,7 @@ HotnessPredictorML* GetHotnessPredictorML() {
   in_init = false;
   
   TC_LOG("[ML] GetHotnessPredictorML() returning predictor");
-  return g_predictor.get();
+  return g_predictor;
 }
 
 }  // namespace tcmalloc_internal
