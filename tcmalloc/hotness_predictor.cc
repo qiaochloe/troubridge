@@ -85,21 +85,13 @@ struct HotnessPredictorML::Impl {
 // Implementation of ImplMmapDeleter
 void HotnessPredictorML::ImplMmapDeleter::operator()(HotnessPredictorML::Impl* ptr) const {
   if (ptr) {
-    // During program exit, global hash tables in tokenizers-cpp/libtorch
-    // may already be destroyed. Reset them explicitly, but if they're already
-    // destroyed, the unique_ptr destructor will handle it gracefully.
-    // We reset them before calling ~Impl() to ensure proper order.
-#ifdef TCMALLOC_USE_TOKENIZERS_CPP
-    if (ptr->tokenizer) {
-      ptr->tokenizer.reset();
-    }
-#endif
-    if (ptr->model) {
-      ptr->model.reset();
-    }
-    ptr->~Impl();
-    size_t size = sizeof(HotnessPredictorML::Impl);
-    munmap(ptr, size);
+    // During program exit, global hash tables in tokenizers-cpp/libtorch may 
+    // already be destroyed. 
+    // 
+    // Intentionally leak the Impl structure (and its contents).
+    // The OS will clean up the mmap'd memory when the process exits.
+
+    (void)ptr;  // Suppress unused parameter warning
   }
 }
 
