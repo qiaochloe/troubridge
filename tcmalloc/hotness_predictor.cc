@@ -125,19 +125,14 @@ bool HotnessPredictorML::Initialize() {
   const char* model_path = "predictor/best_model.ts";
   const char* tokenizer_path = "predictor/tokenizer.json";
 
-  TC_LOG("[ML] Checking file existence: %s", tokenizer_path);
   // Check if files exist before attempting to load
-  bool tokenizer_exists = FileExists(tokenizer_path);
-  TC_LOG("[ML] FileExists returned: %d", tokenizer_exists ? 1 : 0);
-  if (!tokenizer_exists) {
+  // Use access() directly to avoid any potential issues with FileExists wrapper
+  if (access(tokenizer_path, F_OK) != 0) {
     TC_LOG("[ML] Tokenizer file not found: %s - ML predictor disabled", tokenizer_path);
     return false;
   }
 
-  TC_LOG("[ML] Checking file existence: %s", model_path);
-  bool model_exists = FileExists(model_path);
-  TC_LOG("[ML] FileExists returned: %d", model_exists ? 1 : 0);
-  if (!model_exists) {
+  if (access(model_path, F_OK) != 0) {
     TC_LOG("[ML] Model file not found: %s - ML predictor disabled", model_path);
     return false;
   }
