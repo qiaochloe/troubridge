@@ -82,8 +82,11 @@ bool HotnessPredictorML::Initialize() {
       TC_LOG("Failed to read tokenizer file: %s", tokenizer_path);
       return false;
     }
-
-    impl_->tokenizer = tokenizers::Tokenizer::FromBlobJSON(blob);
+    
+    // Convert vector<uint8_t> to string
+    std::string json_blob(reinterpret_cast<const char*>(blob.data()), blob.size());
+    
+    impl_->tokenizer = tokenizers::Tokenizer::FromBlobJSON(json_blob);
     if (!impl_->tokenizer) {
       TC_LOG("Failed to load tokenizer from %s", tokenizer_path);
       return false;
