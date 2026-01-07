@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "absl/base/call_once.h"
@@ -35,9 +36,11 @@ namespace tcmalloc_internal {
 namespace {
 
 // Helper function to check if file exists
+// Uses stat() system call directly to avoid any allocations
 bool FileExists(const std::string& path) {
-  std::ifstream file(path);
-  return file.good();
+  struct stat buffer;
+  int result = stat(path.c_str(), &buffer);
+  return (result == 0);
 }
 
 // Helper function to read file contents
