@@ -139,8 +139,8 @@ TEST(Basic, MeasureAllocationTime) {
 //  std::cout << "==========================================\n\n";
 //}
 
-//}  // namespace
-//}  // namespace tcmalloc
+}  // namespace
+}  // namespace tcmalloc
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
