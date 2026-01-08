@@ -64,32 +64,32 @@ TEST(Basic, MeasureAllocationTime) {
 }
 
 //// Measure allocation time for different sizes
-//TEST(Basic, MeasureAllocationTimeBySize) {
-//  std::cout << "\n=== Allocation Time by Size ===\n";
-//  std::cout << "Size (bytes)\tTime (ns)\tTime (us)\n";
-//  std::cout << "-----------------------------------\n";
+TEST(Basic, MeasureAllocationTimeBySize) {
+  std::cout << "\n=== Allocation Time by Size ===\n";
+  std::cout << "Size (bytes)\tTime (ns)\tTime (us)\n";
+  std::cout << "-----------------------------------\n";
   
-//  const std::vector<size_t> sizes = {8, 16, 32, 64, 128, 256, 512, 1024,
-//                                      4096, 8192, 16384, 65536, 1048576};
-//  const int num_iterations = 10000;
+  const std::vector<size_t> sizes = {8, 16, 32, 64, 128, 256, 512, 1024,
+                                      4096, 8192, 16384, 65536, 1048576};
+  const int num_iterations = 10000;
   
-//  for (size_t size : sizes) {
-//    auto start = std::chrono::high_resolution_clock::now();
-//    for (int i = 0; i < num_iterations; ++i) {
-//      void* ptr = malloc(size);
-//      free(ptr);
-//    }
-//    auto end = std::chrono::high_resolution_clock::now();
-//    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-//        end - start);
+  for (size_t size : sizes) {
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < num_iterations; ++i) {
+      void* ptr = malloc(size);
+      free(ptr);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        end - start);
     
-//    double avg_ns = elapsed.count() / static_cast<double>(num_iterations);
-//    std::cout << size << "\t\t" << avg_ns << "\t\t" << avg_ns / 1000.0
-//              << "\n";
-//  }
+    double avg_ns = elapsed.count() / static_cast<double>(num_iterations);
+    std::cout << size << "\t\t" << avg_ns << "\t\t" << avg_ns / 1000.0
+              << "\n";
+  }
   
-//  std::cout << "==================================\n\n";
-//}
+  std::cout << "==================================\n\n";
+}
 
 //// Measure allocation vs deallocation time separately
 //TEST(Basic, MeasureAllocDeallocTimeSeparately) {
